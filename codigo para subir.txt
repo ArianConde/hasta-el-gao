@@ -1,0 +1,32 @@
+# subir-nuevo.ps1
+
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "   Reemplazando y subiendo nuevo index.html" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Mostrar cambios
+Write-Host "📋 Archivos modificados:" -ForegroundColor Yellow
+git status --porcelain
+Write-Host ""
+
+# Agregar todos los cambios (incluye el nuevo y el borrado)
+Write-Host "📦 Agregando archivos..." -ForegroundColor Green
+git add .
+
+# Hacer commit
+$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
+Write-Host "📝 Haciendo commit..." -ForegroundColor Green
+git commit -m "Reemplazo de index.html - $timestamp"
+
+# Pull con rebase para evitar conflictos
+Write-Host "🔄 Obteniendo cambios remotos..." -ForegroundColor Green
+git pull --rebase origin main
+
+# Subir
+Write-Host "🚀 Subiendo a GitHub..." -ForegroundColor Green
+git push origin main
+
+Write-Host ""
+Write-Host "✅ ¡Nuevo index.html subido!" -ForegroundColor Green
+Read-Host "Presiona Enter para salir"
