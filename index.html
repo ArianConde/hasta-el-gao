@@ -18,29 +18,149 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const _supabase = supabaseClient;
 
-// Auth functions
-async function login(phone, password) {
-  const { data, error } = await supabaseClient.auth.signInWithPassword({
-    phone: phone,
-    password: password,
-  });
-  return { data, error };
-}
+// ===================== AUTENTICACIÓN MEJORADA =====================
 
-// Realtime subscriptions
-function subscribeToOrderChanges(orderId, callback) {
-  return supabaseClient
-    .channel('order-changes')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'pedidos', filter: `id=eq.${orderId}` }, callback)
-    .subscribe();
-}
+// Estado de autenticación
+let currentUser = null;     // { user, perfil, role }
+let authRole = null;        // 'cliente' | 'mensajero' | null
 
-function shareLocation(messengerId, lat, lng) {
-  return supabaseClient
-    .from('mensajeros')
-    .update({ lat, lng, last_update: new Date().toISOString() })
-    .eq('id', messengerId);
-}
+// Funciones de autenticación
+const AuthService = {
+  // Verificar si el usuario tiene un perfil válido en la tabla de su rol
+  async verificarPerfil(role, userId) {
+    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
+    const { data, error } = await _supabase
+      .from(table)
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (error || !data) {
+      return { existe: false, error: error?.message || 'Perfil no encontrado' };
+    }
+    return { existe: true, perfil: data };
+  },
+
+  // Registrar nuevo usuario con todos sus datos
+  async registrar(role, email, password, nombre, carnet, telefono) {
+    // 1. Crear usuario en auth
+    const { data: authData, error: authError } = await _supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { 
+          nombre,
+          rol: role,
+          carnet,
+          telefono
+        }
+      }
+    });
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error('No se pudo crear el usuario');
+
+    // 2. Crear perfil en la tabla correspondiente
+    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
+    const perfilData = {
+      id: authData.user.id,
+      nombre: nombre,
+      telefono: telefono || null,
+      carnet: carnet || null,
+      email: email
+    };
+
+    // Si es mensajero, agregar campos específicos
+    if (role === 'mensajero') {
+      perfilData.disponible = false;
+      perfilData.vehiculo = 'moto';
+      perfilData.lat = null;
+      perfilData.lng = null;
+    }
+
+    const { error: perfilError } = await _supabase
+      .from(table)
+      .insert([perfilData]);
+
+    if (perfilError) {
+      throw new Error('Error al crear perfil: ' + perfilError.message);
+    }
+
+    return { 
+      user: authData.user, 
+      perfil: perfilData,
+      requiereConfirmacion: !authData.session
+    };
+  },
+
+  // Iniciar sesión y verificar rol
+  async login(email, password, role) {
+    // 1. Autenticar en Supabase
+    const { data, error } = await _supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) throw error;
+    if (!data.user) throw new Error('Usuario no encontrado');
+
+    // 2. Verificar que el perfil existe en la tabla del rol elegido
+    const verif = await this.verificarPerfil(role, data.user.id);
+    
+    if (!verif.existe) {
+      await _supabase.auth.signOut();
+      throw new Error(`No tienes una cuenta de ${role === 'mensajero' ? 'mensajero' : 'cliente'}. Verifica que elegiste el rol correcto.`);
+    }
+
+    return {
+      user: data.user,
+      perfil: verif.perfil,
+      role: role
+    };
+  },
+
+  // Obtener usuario actual con su perfil
+  async obtenerUsuarioActual() {
+    const { data: { user } } = await _supabase.auth.getUser();
+    if (!user) return null;
+
+    // Intentar obtener perfil de cliente
+    let { data: perfil, error: errCliente } = await _supabase
+      .from('clientes')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (perfil) {
+      return { user, perfil, role: 'cliente' };
+    }
+
+    // Intentar obtener perfil de mensajero
+    let { data: perfilMensajero, error: errMensajero } = await _supabase
+      .from('mensajeros')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (perfilMensajero) {
+      return { user, perfil: perfilMensajero, role: 'mensajero' };
+    }
+
+    return null;
+  },
+
+  // Actualizar perfil
+  async actualizarPerfil(role, data) {
+    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
+    const { error } = await _supabase
+      .from(table)
+      .update(data)
+      .eq('id', currentUser.user.id);
+    
+    if (error) throw error;
+    return true;
+  }
+};
 </script>
 <!-- ===== FIN SUPABASE INTEGRATION ===== -->
 
@@ -1211,6 +1331,7 @@ function shareLocation(messengerId, lat, lng) {
     width:100%; max-width:360px; background:var(--night2);
     border:1px solid var(--glass-line); border-radius:20px;
     padding:22px 20px; box-shadow:var(--shadow-lg,0 10px 40px rgba(0,0,0,.4));
+    position:relative;
   }
   .authm-title{ font-family:'Sora'; font-weight:800; font-size:1.05rem; color:var(--white); margin-bottom:4px; }
   .authm-sub{ font-size:0.76rem; color:var(--muted); margin-bottom:16px; }
@@ -1228,8 +1349,9 @@ function shareLocation(messengerId, lat, lng) {
     width:100%; border:none; border-radius:12px; padding:12px;
     background:var(--kiwi); color:#111; font-family:'Sora'; font-weight:800;
     font-size:0.84rem; cursor:pointer; margin-top:6px;
+    transition: opacity .15s ease;
   }
-  .authm-btn:disabled{ opacity:0.6; }
+  .authm-btn:disabled{ opacity:0.6; cursor:not-allowed; }
   .authm-switch{
     text-align:center; margin-top:14px; font-size:0.76rem; color:var(--muted);
   }
@@ -1238,7 +1360,6 @@ function shareLocation(messengerId, lat, lng) {
     position:absolute; top:14px; right:16px; background:none; border:none;
     color:var(--muted); font-size:1.1rem; cursor:pointer;
   }
-  .authm-box{ position:relative; }
   .authm-err{ font-size:0.74rem; color:#ff8f8f; margin:-4px 0 10px; display:none; }
   .authm-err.show{ display:block; }
 </style>
@@ -1275,7 +1396,7 @@ function shareLocation(messengerId, lat, lng) {
     </div>
   </div>
 
-  <!-- MODAL: LOGIN / REGISTRO -->
+  <!-- MODAL: LOGIN / REGISTRO MEJORADO -->
   <div class="authm-overlay" id="authModal">
     <div class="authm-box">
       <button class="authm-close" id="authClose">✕</button>
@@ -1286,12 +1407,12 @@ function shareLocation(messengerId, lat, lng) {
 
       <div id="authRegisterFields" style="display:none;">
         <div class="authm-field">
-          <label>Nombre</label>
-          <input type="text" id="authNombre" placeholder="Tu nombre">
+          <label>Nombre completo</label>
+          <input type="text" id="authNombre" placeholder="Tu nombre completo">
         </div>
         <div class="authm-field">
-          <label>Carnet de identidad</label>
-          <input type="text" id="authCarnet" placeholder="Ej: 00000000000" inputmode="numeric" maxlength="11">
+          <label>Carnet de identidad (11 dígitos)</label>
+          <input type="text" id="authCarnet" placeholder="00000000000" inputmode="numeric" maxlength="11">
         </div>
         <div class="authm-field">
           <label>Teléfono</label>
@@ -1300,12 +1421,12 @@ function shareLocation(messengerId, lat, lng) {
       </div>
 
       <div class="authm-field">
-        <label>Correo</label>
+        <label>Correo electrónico</label>
         <input type="email" id="authEmail" placeholder="tucorreo@ejemplo.com">
       </div>
       <div class="authm-field">
         <label>Contraseña</label>
-        <input type="password" id="authPass" placeholder="••••••••">
+        <input type="password" id="authPass" placeholder="•••••••• (mínimo 6 caracteres)">
       </div>
 
       <button class="authm-btn" id="authSubmit">Iniciar sesión</button>
@@ -1616,11 +1737,9 @@ function shareLocation(messengerId, lat, lng) {
 <script>
 /* ===================== CONFIG DE TARIFAS ===================== */
 const TARIFA = {
-  minimo: 1.50       // tarifa mínima del viaje (solo distancia)
+  minimo: 1.50
 };
 
-// Cada vehículo define su propio costo base, costo por km y velocidad
-// promedio (usada para estimar el tiempo de llegada del repartidor).
 const VEHICLES = {
   bicicleta: { label:'Bicicleta', icon:'🚲', base:0.50, porKm:0.15, speedKmh:14 },
   moto:      { label:'Moto',      icon:'🏍️', base:0.80, porKm:0.25, speedKmh:32 },
@@ -1628,25 +1747,298 @@ const VEHICLES = {
 };
 
 /* ===================== ESTADO ===================== */
-let origin = null;   // {lat,lng}
-let dest = null;     // {lat,lng}
+let origin = null;
+let dest = null;
 let originMarker, destMarker, routeLine;
 let routeKm = 0;
 let routeMin = 0;
 let sizeExtra = 0;
 let weightKg = 2;
 let selectedVehicle = 'bicicleta';
-let couriers = [];   // repartidores simulados cerca del punto de recogida
-
-/* ===================== MAPA (CLIENTE) ===================== */
+let couriers = [];
+let userRole = null;
+let mensajeroMap = null;
+let mensajeroLayer = null;
+let mensajeroRangeCircle = null;
+let activeRouteLayer = null;
+let _activeRouteCalcId = 0;
+let mensajeroPos = null;
+let mensajeroVehiculo = 'moto';
+let mensajeroOrders = [];
+let activeDelivery = null;
+let deliveryHistory = [];
+let histFilterPeriod = 'all';
 let map = null;
 let couriersLayer = null;
 let rangeCircle = null;
+let mensajeroWatchId = null;
+let mensajeroMarker = null;
+let mensajeroAccCircle = null;
+let lastOrderGenLat = null;
+let lastOrderGenLng = null;
+const REGEN_DIST_KM = 0.4;
 
-// El mapa se crea cuando la vista ya es visible (al elegir la cuenta
-// "Tengo un paquete"), evitando que Leaflet calcule un tamaño 0x0 y
-// los tiles no carguen o se vean cortados.
-function initClienteMap(){
+/* ===================== AUTENTICACIÓN ===================== */
+
+// Referencias al modal
+const authModalEl = document.getElementById('authModal');
+const authTitleEl = document.getElementById('authTitle');
+const authSubEl = document.getElementById('authSub');
+const authErrEl = document.getElementById('authErr');
+const authRegFields = document.getElementById('authRegisterFields');
+const authSubmitBtn = document.getElementById('authSubmit');
+const authSwitchTxt = document.getElementById('authSwitchText');
+const authSwitchLnk = document.getElementById('authSwitchLink');
+
+let pendingRole = null;
+let authMode = 'login';
+
+function openAuthModal(role) {
+  pendingRole = role;
+  authMode = 'login';
+  authErrEl.classList.remove('show');
+  authErrEl.textContent = '';
+  
+  document.getElementById('authEmail').value = '';
+  document.getElementById('authPass').value = '';
+  document.getElementById('authNombre').value = '';
+  document.getElementById('authCarnet').value = '';
+  document.getElementById('authTelefono').value = '';
+  
+  renderAuthMode();
+  authModalEl.classList.add('show');
+}
+
+function closeAuthModal() {
+  authModalEl.classList.remove('show');
+}
+
+function renderAuthMode() {
+  const roleTxt = pendingRole === 'mensajero' ? 'mensajero' : 'cliente';
+  
+  if (authMode === 'login') {
+    authTitleEl.textContent = 'Iniciar sesión';
+    authSubEl.textContent = `Entra para continuar como ${roleTxt}`;
+    authRegFields.style.display = 'none';
+    authSubmitBtn.textContent = 'Iniciar sesión';
+    authSwitchTxt.textContent = '¿No tienes cuenta?';
+    authSwitchLnk.textContent = 'Regístrate';
+  } else {
+    authTitleEl.textContent = 'Crear cuenta';
+    authSubEl.textContent = `Regístrate para continuar como ${roleTxt}`;
+    authRegFields.style.display = '';
+    authSubmitBtn.textContent = 'Registrarme';
+    authSwitchTxt.textContent = '¿Ya tienes cuenta?';
+    authSwitchLnk.textContent = 'Inicia sesión';
+  }
+}
+
+function showError(msg) {
+  authErrEl.textContent = msg;
+  authErrEl.classList.add('show');
+}
+
+function hideError() {
+  authErrEl.classList.remove('show');
+  authErrEl.textContent = '';
+}
+
+// Evento de cierre del modal
+document.getElementById('authClose').addEventListener('click', closeAuthModal);
+
+// Alternar entre login y registro
+authSwitchLnk.addEventListener('click', () => {
+  authMode = authMode === 'login' ? 'register' : 'login';
+  hideError();
+  renderAuthMode();
+});
+
+// Evento de envío del formulario de autenticación
+authSubmitBtn.addEventListener('click', async () => {
+  const email = document.getElementById('authEmail').value.trim();
+  const pass = document.getElementById('authPass').value.trim();
+  const nombre = document.getElementById('authNombre').value.trim();
+  const carnet = document.getElementById('authCarnet').value.trim();
+  const telefono = document.getElementById('authTelefono').value.trim();
+
+  if (!email || !pass) {
+    showError('Ingresa correo y contraseña');
+    return;
+  }
+  
+  if (pass.length < 6) {
+    showError('La contraseña debe tener al menos 6 caracteres');
+    return;
+  }
+
+  if (authMode === 'register') {
+    if (!nombre) {
+      showError('Ingresa tu nombre completo');
+      return;
+    }
+    if (!carnet || !/^\d{11}$/.test(carnet)) {
+      showError('El carnet de identidad debe tener 11 dígitos');
+      return;
+    }
+  }
+
+  authSubmitBtn.disabled = true;
+  authSubmitBtn.textContent = authMode === 'login' ? 'Entrando...' : 'Creando cuenta...';
+  hideError();
+
+  try {
+    if (authMode === 'login') {
+      const result = await AuthService.login(email, pass, pendingRole);
+      currentUser = result;
+      closeAuthModal();
+      showToast(`✅ Bienvenido ${result.perfil.nombre || 'usuario'}`);
+      setRole(result.role);
+    } else {
+      const result = await AuthService.registrar(
+        pendingRole,
+        email,
+        pass,
+        nombre,
+        carnet,
+        telefono
+      );
+
+      if (result.requiereConfirmacion) {
+        closeAuthModal();
+        showToast('📩 Revisa tu correo para confirmar la cuenta. Luego inicia sesión.');
+        return;
+      }
+
+      currentUser = { user: result.user, perfil: result.perfil, role: pendingRole };
+      closeAuthModal();
+      showToast('✅ Cuenta creada exitosamente');
+      setRole(pendingRole);
+    }
+  } catch (err) {
+    showError(err.message || 'Error de autenticación');
+  } finally {
+    authSubmitBtn.disabled = false;
+    renderAuthMode();
+  }
+});
+
+// Cerrar sesión
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  if (userRole === 'mensajero') stopWatchingMensajero();
+  
+  try {
+    await _supabase.auth.signOut();
+  } catch(e) { /* ignorar */ }
+  
+  currentUser = null;
+  userRole = null;
+  authRole = null;
+  
+  document.getElementById('view-role').classList.remove('authenticated');
+  document.getElementById('app').classList.add('pre-role');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-role').classList.add('active');
+  
+  document.getElementById('authPass').value = '';
+  document.getElementById('authEmail').value = '';
+  
+  showToast('👋 Sesión cerrada');
+});
+
+/* ===================== NAVEGACIÓN ===================== */
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+/* ===================== SELECCIÓN DE ROL ===================== */
+
+async function setRole(role) {
+  userRole = role;
+  document.getElementById('app').classList.remove('pre-role');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+  if (role === 'cliente') {
+    stopWatchingMensajero();
+    document.getElementById('navCliente').style.display = 'flex';
+    document.getElementById('navMensajero').style.display = 'none';
+    document.getElementById('view-pedido').classList.add('active');
+    document.querySelector('#navCliente .nav-btn[data-view="view-pedido"]').classList.add('active');
+    document.getElementById('roleBarLabel').textContent = `📦 ${currentUser?.perfil?.nombre || 'Cliente'} · Tengo un paquete`;
+    resetChat('them', 'Carlos R. · Repartidor', '● En camino', 'CR', 'Hola, ya estoy en camino para recoger tu pedido.');
+    initClienteMap();
+    setTimeout(() => map?.invalidateSize(), 100);
+  } else {
+    document.getElementById('navCliente').style.display = 'none';
+    document.getElementById('navMensajero').style.display = 'flex';
+    document.getElementById('view-mensajero').classList.add('active');
+    document.querySelector('#navMensajero .nav-btn[data-view="view-mensajero"]').classList.add('active');
+    document.getElementById('roleBarLabel').textContent = `🛵 ${currentUser?.perfil?.nombre || 'Mensajero'} · Disponible`;
+    resetChat('them', 'Esperando pedido...', '● Sin pedido activo', '··', null);
+    initMensajeroMode();
+  }
+}
+
+function resetChat(who, name, role, initials, firstMsg) {
+  document.querySelector('.chat-avatar').textContent = initials;
+  document.querySelector('.chat-who .nm').textContent = name;
+  document.querySelector('.chat-who .role').innerHTML = role;
+  const chatBodyEl = document.getElementById('chatBody');
+  if (chatBodyEl) {
+    chatBodyEl.innerHTML = '';
+    if (firstMsg) addMessage(firstMsg, who);
+  }
+}
+
+function addMessage(text, who) {
+  const chatBodyEl = document.getElementById('chatBody');
+  if (!chatBodyEl) return;
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
+  chatBodyEl.appendChild(div);
+  chatBodyEl.scrollTop = chatBodyEl.scrollHeight;
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+/* ===================== INICIALIZACIÓN ===================== */
+
+async function initApp() {
+  try {
+    const session = await AuthService.obtenerUsuarioActual();
+    
+    if (session) {
+      currentUser = session;
+      const role = session.role;
+      
+      if (role) {
+        document.getElementById('view-role').classList.add('authenticated');
+        setRole(role);
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('No hay sesión activa:', e.message);
+  }
+  
+  document.getElementById('view-role').classList.remove('authenticated');
+  document.getElementById('app').classList.add('pre-role');
+}
+
+/* ===================== MAPA CLIENTE ===================== */
+
+function initClienteMap() {
   if (map) return;
 
   map = L.map('map', {
@@ -1655,7 +2047,7 @@ function initClienteMap(){
     zoomAnimation: true,
     markerZoomAnimation: true,
     preferCanvas: true
-  }).setView([23.1136, -82.3666], 13); // La Habana, Cuba
+  }).setView([23.1136, -82.3666], 13);
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -1673,14 +2065,11 @@ function initClienteMap(){
     } else if (!dest) {
       setDest(e.latlng);
     } else {
-      // ambos puntos ya están: reinicia y empieza de nuevo desde el clic
       resetPoints();
       setOrigin(e.latlng);
     }
   });
 
-  // dos pasadas de invalidateSize para asegurar que los tiles se
-  // dibujen correctamente apenas el contenedor tenga su tamaño final
   setTimeout(() => map.invalidateSize(), 80);
   setTimeout(() => map.invalidateSize(), 350);
 }
@@ -1689,26 +2078,22 @@ const originIcon = L.divIcon({
   html: '<div style="background:#89e900;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
   className: '', iconSize:[16,16], iconAnchor:[8,8]
 });
+
 const destIcon = L.divIcon({
   html: '<div style="background:#89e900;width:16px;height:16px;border-radius:3px;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
   className: '', iconSize:[16,16], iconAnchor:[8,8]
 });
 
-/* ===================== REPARTIDORES CERCANOS ===================== */
-const NOMBRES_REPARTIDORES = ['Carlos','Yusniel','Maykel','Ariel','Reinier','Yoel','Frank','Yandry','Lázaro','Osmany','Elier','Randy'];
-const NOMBRES_CLIENTES     = ['Ana M.','Roberto P.','Liset G.','Dayana F.','Mileidis V.','Jorge A.','Yolanda R.','Pedro J.','Lisbet C.','Mabel O.','Ernesto L.','Caridad T.'];
-const RANGO_KM = 1.8; // rango de búsqueda alrededor del punto de recogida
-
-function courierIcon(vehicle){
+function courierIcon(vehicle) {
   return L.divIcon({
     html: `<div style="background:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;border:2px solid #222222;box-shadow:0 1px 4px rgba(0,0,0,.25)">${VEHICLES[vehicle].icon}</div>`,
     className: '', iconSize:[28,28], iconAnchor:[14,14]
   });
 }
 
-// Genera repartidores en posiciones aleatorias dentro del rango (RANGO_KM)
-// alrededor del punto de recogida, simulando su ubicación en tiempo real.
-async function generateCouriers(center){
+const RANGO_KM = 1.8;
+
+async function generateCouriers(center) {
   couriers = [];
   try {
     const { data, error } = await _supabase
@@ -1737,7 +2122,7 @@ async function generateCouriers(center){
   updateCourierInfo();
 }
 
-function renderCouriers(center){
+function renderCouriers(center) {
   couriersLayer.clearLayers();
   if (rangeCircle) map.removeLayer(rangeCircle);
   rangeCircle = L.circle(center, {
@@ -1754,17 +2139,16 @@ function renderCouriers(center){
   });
 }
 
-// Actualiza el aviso de repartidores disponibles según el vehículo elegido
-function updateCourierInfo(){
+function updateCourierInfo() {
   const box = document.getElementById('courierInfo');
-  if (!origin || couriers.length === 0){
+  if (!origin || couriers.length === 0) {
     box.classList.remove('active');
     box.innerHTML = `<span class="ci-icon">📍</span><span class="ci-text">Marca el punto de recogida para ver repartidores cercanos</span>`;
     return;
   }
   const compatibles = couriers.filter(c => c.vehicle === selectedVehicle).sort((a,b) => a.dist - b.dist);
   box.classList.add('active');
-  if (compatibles.length === 0){
+  if (compatibles.length === 0) {
     box.innerHTML = `<span class="ci-icon">⚠️</span><span class="ci-text">Ahora mismo no hay <b>${VEHICLES[selectedVehicle].label.toLowerCase()}</b> cerca, pero tu pedido quedará en espera.</span>`;
   } else {
     const nearest = compatibles[0];
@@ -1774,21 +2158,21 @@ function updateCourierInfo(){
   }
 }
 
-function clearCouriers(){
+function clearCouriers() {
   couriers = [];
   if (couriersLayer) couriersLayer.clearLayers();
   if (rangeCircle) { map.removeLayer(rangeCircle); rangeCircle = null; }
   updateCourierInfo();
 }
 
-function setOrigin(latlng){
+function setOrigin(latlng) {
   origin = latlng;
   if (originMarker) map.removeLayer(originMarker);
   originMarker = L.marker(latlng, {icon: originIcon}).addTo(map).bindPopup('Punto de recogida');
   document.getElementById('originText').textContent = 'Buscando dirección...';
   document.getElementById('originText').classList.remove('placeholder');
   reverseGeocode(latlng).then(addr => {
-    if (origin !== latlng) return; // el punto cambió mientras se buscaba
+    if (origin !== latlng) return;
     document.getElementById('originText').textContent = addr;
     originMarker.setPopupContent(`Recogida: ${addr}`);
   });
@@ -1797,14 +2181,14 @@ function setOrigin(latlng){
   recalcRoute();
 }
 
-function setDest(latlng){
+function setDest(latlng) {
   dest = latlng;
   if (destMarker) map.removeLayer(destMarker);
   destMarker = L.marker(latlng, {icon: destIcon}).addTo(map).bindPopup('Punto de entrega');
   document.getElementById('destText').textContent = 'Buscando dirección...';
   document.getElementById('destText').classList.remove('placeholder');
   reverseGeocode(latlng).then(addr => {
-    if (dest !== latlng) return; // el punto cambió mientras se buscaba
+    if (dest !== latlng) return;
     document.getElementById('destText').textContent = addr;
     destMarker.setPopupContent(`Entrega: ${addr}`);
   });
@@ -1812,12 +2196,12 @@ function setDest(latlng){
   recalcRoute();
 }
 
-function resetPoints(){
+function resetPoints() {
   origin = null; dest = null; routeKm = 0; routeMin = 0;
-  _routeCalcId++; // cancelar cualquier petición OSRM en vuelo
+  _routeCalcId++;
   if (originMarker) map.removeLayer(originMarker);
-  if (destMarker)   map.removeLayer(destMarker);
-  if (routeLine)    map.removeLayer(routeLine);
+  if (destMarker) map.removeLayer(destMarker);
+  if (routeLine) map.removeLayer(routeLine);
   originMarker = destMarker = routeLine = null;
   clearCouriers();
   document.getElementById('originText').textContent = 'Toca el mapa o usa tu ubicación';
@@ -1828,15 +2212,14 @@ function resetPoints(){
   document.getElementById('recipientPhone').value = '';
   document.getElementById('resultArea').innerHTML =
     '<div class="empty-result">Marca los dos puntos en el mapa para ver el costo del viaje.</div>';
-
-  // Restaurar el onclick del botón al listener original (si se personalizó)
+  
   const btn = document.getElementById('btnSolicitar');
   btn.onclick = null;
   updateButton();
   updateHint();
 }
 
-function updateHint(){
+function updateHint() {
   const hint = document.getElementById('mapHint');
   if (!origin) hint.textContent = 'Toca el mapa para marcar el punto de recogida';
   else if (!dest) hint.textContent = 'Ahora toca el punto de entrega';
@@ -1846,17 +2229,11 @@ function updateHint(){
   hint._t = setTimeout(()=> hint.classList.add('hide'), 2600);
 }
 
-function formatCoord(latlng){
+function formatCoord(latlng) {
   return `${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`;
 }
 
-// Convierte coordenadas en el nombre de la calle (y zona) más cercana
-// usando el servicio de geocodificación inversa de OpenStreetMap.
-// Nota: se evita enviar cabeceras personalizadas (como Accept-Language)
-// porque provocan una solicitud CORS "preflight" que Nominatim no
-// responde correctamente desde el navegador, haciendo fallar el fetch
-// y mostrando siempre las coordenadas como respaldo.
-async function reverseGeocode(latlng){
+async function reverseGeocode(latlng) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latlng.lat}&lon=${latlng.lng}&zoom=18&addressdetails=1&accept-language=es`;
     const res = await fetch(url);
@@ -1871,14 +2248,15 @@ async function reverseGeocode(latlng){
       if (calle) return `${calle}${numero}`;
       if (data.display_name) return data.display_name.split(',').slice(0,2).join(',');
     }
-  } catch(e) { /* sin conexión o error de red: se deja la coordenada como respaldo */ }
+  } catch(e) { /* ignorar */ }
   return formatCoord(latlng);
 }
 
 /* ===================== RUTA / DISTANCIA ===================== */
-// Contador para descartar respuestas OSRM desfasadas (race condition)
+
 let _routeCalcId = 0;
-function haversineKm(a, b){
+
+function haversineKm(a, b) {
   const R = 6371;
   const dLat = (b.lat - a.lat) * Math.PI/180;
   const dLng = (b.lng - a.lng) * Math.PI/180;
@@ -1888,35 +2266,22 @@ function haversineKm(a, b){
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-// Desplaza un punto `distKm` en la dirección `angle` (radianes).
-function offsetPoint(center, angle, distKm){
-  const dLat = (distKm/111) * Math.cos(angle);
-  const dLng = (distKm/(111 * Math.cos(center.lat * Math.PI/180))) * Math.sin(angle);
-  return { lat: center.lat + dLat, lng: center.lng + dLng };
-}
-
-// Calcula el desglose de costo de un viaje según vehículo, distancia,
-// extra por tamaño de paquete y extra por peso. Se usa tanto para el
-// precio que ve el cliente como para el pago estimado del mensajero.
-function calcularCosto(vehicleKey, km, sizeExtraVal, weightVal){
+function calcularCosto(vehicleKey, km, sizeExtraVal, weightVal) {
   const veh = VEHICLES[vehicleKey];
   const distancia = Math.max(veh.base + km * veh.porKm, TARIFA.minimo);
   const peso = weightVal > 3 ? (weightVal - 3) * 0.50 : 0;
   return { distancia, sizeExtra: sizeExtraVal, peso, total: distancia + sizeExtraVal + peso };
 }
 
-async function recalcRoute(){
+async function recalcRoute() {
   if (!origin || !dest) return;
 
-  // Marcar esta solicitud con un ID único; si llega otra antes que se
-  // resuelva la petición OSRM, descartamos la respuesta antigua.
   const myId = ++_routeCalcId;
 
   if (routeLine) map.removeLayer(routeLine);
   routeLine = L.featureGroup().addTo(map);
   routeKm = 0; routeMin = 0;
 
-  // Mostrar estado "Calculando..." mientras espera OSRM
   document.getElementById('resultArea').innerHTML =
     '<div class="loading-route"><div class="spin"></div> Calculando ruta…</div>';
   updateButton();
@@ -1926,20 +2291,18 @@ async function recalcRoute(){
     const res = await fetch(url);
     const data = await res.json();
 
-    if (myId !== _routeCalcId) return; // resultado desfasado, ignorar
+    if (myId !== _routeCalcId) return;
 
     if (data.routes && data.routes.length) {
-      // Elegir la ruta de menor duración estimada
       const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
 
-      // Dibujar alternativas de forma tenue
       data.routes.forEach(r => {
         if (r === best) return;
         const coords = r.geometry.coordinates.map(c => [c[1], c[0]]);
         L.polyline(coords, { color:'rgba(137,233,0,0.3)', weight:3, opacity:0.7, dashArray:'2 8' }).addTo(routeLine);
       });
 
-      routeKm  = best.distance / 1000;
+      routeKm = best.distance / 1000;
       routeMin = best.duration / 60;
       const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
       L.polyline(coords, { color:'#89e900', weight:5, opacity:0.95 }).addTo(routeLine);
@@ -1948,9 +2311,8 @@ async function recalcRoute(){
     }
   } catch(e) {
     if (myId !== _routeCalcId) return;
-    // Fallback: línea recta + factor de corrección por calles
     const veh = VEHICLES[selectedVehicle];
-    routeKm  = haversineKm(origin, dest) * 1.3;
+    routeKm = haversineKm(origin, dest) * 1.3;
     routeMin = (routeKm / veh.speedKmh) * 60;
     L.polyline([origin, dest], { color:'rgba(137,233,0,0.6)', weight:3, dashArray:'6 6', opacity:0.8 }).addTo(routeLine);
   }
@@ -1958,67 +2320,14 @@ async function recalcRoute(){
   map.fitBounds(routeLine.getBounds(), { padding: [40,40] });
   updatePrice();
   updateButton();
-  // Scroll suave al bloque de resultado para que el usuario lo vea
   setTimeout(() => {
     const el = document.getElementById('resultArea');
     if (el) el.scrollIntoView({ behavior:'smooth', block:'nearest' });
   }, 150);
 }
 
-/* ===================== VEHÍCULO ===================== */
-document.querySelectorAll('#vehicleOptions .size-card').forEach(card => {
-  card.addEventListener('click', () => {
-    document.querySelectorAll('#vehicleOptions .size-card').forEach(c => c.classList.remove('active'));
-    card.classList.add('active');
-    selectedVehicle = card.dataset.vehicle;
-    updatePrice();
-    updateCourierInfo();
-  });
-});
-
-/* ===================== TAMAÑO Y PESO ===================== */
-document.querySelectorAll('#sizeOptions .size-card').forEach(card => {
-  card.addEventListener('click', () => {
-    document.querySelectorAll('#sizeOptions .size-card').forEach(c => c.classList.remove('active'));
-    card.classList.add('active');
-    sizeExtra = parseFloat(card.dataset.extra);
-    updatePrice();
-  });
-});
-
-document.getElementById('wPlus').addEventListener('click', () => {
-  weightKg = Math.min(weightKg + 1, 50);
-  document.getElementById('wVal').value = weightKg;
-  updatePrice();
-});
-document.getElementById('wMinus').addEventListener('click', () => {
-  weightKg = Math.max(weightKg - 1, 1);
-  document.getElementById('wVal').value = weightKg;
-  updatePrice();
-});
-
-// Permite escribir el peso directamente en el campo
-document.getElementById('wVal').addEventListener('input', () => {
-  const input = document.getElementById('wVal');
-  const val = parseInt(input.value, 10);
-  if (!isNaN(val)) {
-    weightKg = Math.min(Math.max(val, 1), 50);
-    updatePrice();
-  }
-});
-// Al salir del campo, corrige valores vacíos o inválidos
-document.getElementById('wVal').addEventListener('blur', () => {
-  const input = document.getElementById('wVal');
-  const val = parseInt(input.value, 10);
-  weightKg = isNaN(val) ? 1 : Math.min(Math.max(val, 1), 50);
-  input.value = weightKg;
-  updatePrice();
-});
-
-/* ===================== PRECIO ===================== */
-function updatePrice(){
+function updatePrice() {
   const result = document.getElementById('resultArea');
-  // Si la ruta aún no cargó (0 km) no sobreescribir el loading state
   if (!origin || !dest || routeKm === 0) return;
 
   const veh = VEHICLES[selectedVehicle];
@@ -2038,8 +2347,7 @@ function updatePrice(){
   `;
 }
 
-/* ===================== BOTONES ===================== */
-function updateButton(){
+function updateButton() {
   const btn = document.getElementById('btnSolicitar');
   if (origin && dest && routeKm > 0) {
     btn.disabled = false;
@@ -2056,6 +2364,115 @@ function updateButton(){
   }
 }
 
+/* ===================== VEHÍCULO ===================== */
+
+document.querySelectorAll('#vehicleOptions .size-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('#vehicleOptions .size-card').forEach(c => c.classList.remove('active'));
+    card.classList.add('active');
+    selectedVehicle = card.dataset.vehicle;
+    updatePrice();
+    updateCourierInfo();
+  });
+});
+
+/* ===================== TAMAÑO Y PESO ===================== */
+
+document.querySelectorAll('#sizeOptions .size-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('#sizeOptions .size-card').forEach(c => c.classList.remove('active'));
+    card.classList.add('active');
+    sizeExtra = parseFloat(card.dataset.extra);
+    updatePrice();
+  });
+});
+
+document.getElementById('wPlus').addEventListener('click', () => {
+  weightKg = Math.min(weightKg + 1, 50);
+  document.getElementById('wVal').value = weightKg;
+  updatePrice();
+});
+
+document.getElementById('wMinus').addEventListener('click', () => {
+  weightKg = Math.max(weightKg - 1, 1);
+  document.getElementById('wVal').value = weightKg;
+  updatePrice();
+});
+
+document.getElementById('wVal').addEventListener('input', () => {
+  const input = document.getElementById('wVal');
+  const val = parseInt(input.value, 10);
+  if (!isNaN(val)) {
+    weightKg = Math.min(Math.max(val, 1), 50);
+    updatePrice();
+  }
+});
+
+document.getElementById('wVal').addEventListener('blur', () => {
+  const input = document.getElementById('wVal');
+  const val = parseInt(input.value, 10);
+  weightKg = isNaN(val) ? 1 : Math.min(Math.max(val, 1), 50);
+  input.value = weightKg;
+  updatePrice();
+});
+
+/* ===================== BOTONES ===================== */
+
+document.getElementById('btnReset').addEventListener('click', resetPoints);
+document.getElementById('btnReset2').addEventListener('click', resetPoints);
+
+document.getElementById('btnLocate').addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    showToast('⚠️ Tu navegador no soporta GPS');
+    return;
+  }
+
+  if (location.protocol === 'file:') {
+    showToast('⚠️ Abre el archivo desde un servidor (no desde file://)');
+    return;
+  }
+
+  showToast('📡 Obteniendo tu ubicación…');
+  document.getElementById('btnLocate').disabled = true;
+
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      document.getElementById('btnLocate').disabled = false;
+      const latlng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      map.setView(latlng, 15);
+      setOrigin(latlng);
+    },
+    err => {
+      document.getElementById('btnLocate').disabled = false;
+      const msgs = {
+        1: '🔒 Permiso denegado — activa la ubicación en Ajustes del navegador',
+        2: '📵 Señal GPS no disponible — muévete a un lugar con mejor señal',
+        3: '⏱️ Tiempo agotado — reintentando con red…'
+      };
+      if (err.code === 3) {
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            const latlng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            map.setView(latlng, 14);
+            setOrigin(latlng);
+            showToast('📍 Ubicación aproximada (red)');
+          },
+          () => showToast('❌ No se pudo obtener ubicación'),
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+        );
+      } else {
+        showToast(msgs[err.code] || '❌ Error de ubicación');
+      }
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+  );
+});
+
+/* ===================== BOTÓN SOLICITAR ===================== */
+
+let courierLiveMarker = null;
+let courierLiveChannel = null;
+
 document.getElementById('btnSolicitar').addEventListener('click', async () => {
   const btn = document.getElementById('btnSolicitar');
   btn.disabled = true;
@@ -2069,11 +2486,9 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
     return;
   }
 
-  // Garantiza que exista la fila del cliente antes de crear el pedido,
-  // para evitar el error de "cliente_id no existe" (foreign key).
   const { error: profileError } = await _supabase
     .from('clientes')
-    .upsert({ id: user.id, nombre: 'Usuario' }, { onConflict: 'id', ignoreDuplicates: true });
+    .upsert({ id: user.id, nombre: currentUser?.perfil?.nombre || 'Usuario' }, { onConflict: 'id', ignoreDuplicates: true });
   if (profileError) {
     showToast('❌ Error al verificar tu perfil: ' + profileError.message);
     btn.disabled = false;
@@ -2083,7 +2498,6 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
 
   const costo = calcularCosto(selectedVehicle, routeKm, sizeExtra, weightKg);
   
-  // Obtener el nombre del paquete seleccionado
   const activeSizeCard = document.querySelector('#sizeOptions .size-card.active');
   const paqueteLabel = activeSizeCard ? activeSizeCard.querySelector('.label').textContent : 'Pequeño';
   
@@ -2118,7 +2532,6 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
   showToast('📡 Buscando repartidor en tiempo real...');
   btn.textContent = 'BUSCANDO...';
 
-  // Escuchar cambios en tiempo real para este pedido
   const channel = _supabase
     .channel(`pedido-${pedido.id}`)
     .on('postgres_changes', { 
@@ -2150,13 +2563,11 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
               document.getElementById('chatBadge').style.display = 'block';
               btn.textContent = 'PEDIDO EN CURSO';
 
-              // — Tiempo real: seguir al mensajero en el mapa y el chat —
               trackAssignedCourier(mensajero.id, mensajero.vehiculo || 'moto');
               subscribeToChat(pedido.id);
             }
           });
       } else if (updatedPedido.estado === 'completado') {
-        // El repartidor exclusivo finalizó el encargo: deja de rastrearlo
         showToast('📦 ¡Tu pedido fue entregado!');
         if (courierLiveChannel) { _supabase.removeChannel(courierLiveChannel); courierLiveChannel = null; }
         if (courierLiveMarker) { map.removeLayer(courierLiveMarker); courierLiveMarker = null; }
@@ -2166,20 +2577,16 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
     .subscribe();
 });
 
-// Marcador que sigue en vivo al mensajero asignado (lado cliente).
-let courierLiveMarker = null;
-let courierLiveChannel = null;
-function trackAssignedCourier(mensajeroId, vehiculo){
+function trackAssignedCourier(mensajeroId, vehiculo) {
   if (courierLiveChannel) {
     _supabase.removeChannel(courierLiveChannel);
     courierLiveChannel = null;
   }
 
-  // Desde que el cliente tiene repartidor exclusivo, se oculta el pool
-  // general de repartidores cercanos: solo se ve el asignado a su encargo.
   couriers = [];
   if (couriersLayer) couriersLayer.clearLayers();
   if (rangeCircle) { map.removeLayer(rangeCircle); rangeCircle = null; }
+  
   courierLiveChannel = _supabase
     .channel(`mensajero-live-${mensajeroId}`)
     .on('postgres_changes', {
@@ -2202,8 +2609,25 @@ function trackAssignedCourier(mensajeroId, vehiculo){
     .subscribe();
 }
 
-// Muestra el resumen + botón WhatsApp tras solicitar el pedido
-function mostrarBotonesPostSolicitud(asignado, etaMin){
+function asignarRepartidorAlChat(courier, etaMin) {
+  const veh = VEHICLES[courier.vehicle];
+  document.querySelector('.chat-avatar').textContent = courier.name.slice(0,2).toUpperCase();
+  document.querySelector('.chat-who .nm').textContent = `${courier.name} · Repartidor`;
+  document.querySelector('.chat-who .role').innerHTML = `● En camino · ${veh.label} · ~${etaMin} min`;
+  addMessage(`¡Hola! Soy ${courier.name}, voy en ${veh.label.toLowerCase()} ${veh.icon} hacia el punto de recogida. Llego en unos ${etaMin} minutos.`, 'them');
+
+  const ref = document.getElementById('addrDetail').value.trim();
+  const tel = document.getElementById('recipientPhone').value.trim();
+  if (ref || tel) {
+    let extra = 'Para la entrega: ';
+    if (ref) extra += `${ref}`;
+    if (ref && tel) extra += ' · ';
+    if (tel) extra += `Tel. de contacto ${tel}`;
+    addMessage(extra, 'me');
+  }
+}
+
+function mostrarBotonesPostSolicitud(asignado, etaMin) {
   const veh      = VEHICLES[asignado.vehicle];
   const costo    = calcularCosto(selectedVehicle, routeKm, sizeExtra, weightKg);
   const origen   = document.getElementById('originText').textContent;
@@ -2226,7 +2650,6 @@ function mostrarBotonesPostSolicitud(asignado, etaMin){
 
   const waUrl = `https://wa.me/?text=${encodeURIComponent(lines)}`;
 
-  // Mostrar tarjeta de confirmación debajo del resultado
   const resultArea = document.getElementById('resultArea');
   const confirmBox = document.createElement('div');
   confirmBox.style.cssText = 'margin-top:14px;';
@@ -2243,7 +2666,6 @@ function mostrarBotonesPostSolicitud(asignado, etaMin){
     </a>`;
   resultArea.appendChild(confirmBox);
 
-  // El botón principal queda como "Ver chat"
   const btn = document.getElementById('btnSolicitar');
   btn.disabled = false;
   btn.textContent = 'Abrir chat con el repartidor';
@@ -2254,170 +2676,6 @@ function mostrarBotonesPostSolicitud(asignado, etaMin){
     document.querySelector('#navCliente .nav-btn[data-view="view-chat"]').classList.add('active');
     document.getElementById('chatBadge').style.display = 'none';
   };
-}
-
-document.getElementById('btnReset').addEventListener('click', resetPoints);
-document.getElementById('btnReset2').addEventListener('click', resetPoints);
-
-document.getElementById('btnLocate').addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    showToast('⚠️ Tu navegador no soporta GPS');
-    return;
-  }
-
-  // Detectar si estamos en file:// (Chrome bloquea geo en file://)
-  if (location.protocol === 'file:') {
-    showToast('⚠️ Abre el archivo desde un servidor (no desde file://)');
-    return;
-  }
-
-  showToast('📡 Obteniendo tu ubicación…');
-  document.getElementById('btnLocate').disabled = true;
-
-  navigator.geolocation.getCurrentPosition(
-    pos => {
-      document.getElementById('btnLocate').disabled = false;
-      const latlng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      map.setView(latlng, 15);
-      setOrigin(latlng);
-    },
-    err => {
-      document.getElementById('btnLocate').disabled = false;
-      const msgs = {
-        1: '🔒 Permiso denegado — activa la ubicación en Ajustes del navegador',
-        2: '📵 Señal GPS no disponible — muévete a un lugar con mejor señal',
-        3: '⏱️ Tiempo agotado — reintentando con red…'
-      };
-      if (err.code === 3) {
-        // Timeout: reintentar con baja precisión (red en vez de GPS)
-        navigator.geolocation.getCurrentPosition(
-          pos => {
-            const latlng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            map.setView(latlng, 14);
-            setOrigin(latlng);
-            showToast('📍 Ubicación aproximada (red)');
-          },
-          () => showToast('❌ No se pudo obtener ubicación'),
-          { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
-        );
-      } else {
-        showToast(msgs[err.code] || '❌ Error de ubicación');
-      }
-    },
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
-  );
-});
-
-/* ===================== TOAST ===================== */
-function showToast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
-}
-
-/* ===================== NAVEGACIÓN ENTRE VISTAS ===================== */
-document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const nav = btn.closest('.bottom-nav');
-    nav.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(btn.dataset.view).classList.add('active');
-
-    if (btn.dataset.view === 'view-chat') {
-      document.getElementById('chatBadge').style.display = 'none';
-      document.getElementById('chatBadgeMensajero').style.display = 'none';
-    }
-    setTimeout(() => {
-      if (map) map.invalidateSize();
-      if (mensajeroMap) mensajeroMap.invalidateSize();
-    }, 50);
-  });
-});
-
-/* ===================== CHAT ===================== */
-const chatBody = document.getElementById('chatBody');
-const respuestasRepartidor = [
-  'Claro, voy en camino 🚴',
-  'Estoy a unos 5 minutos de la recogida.',
-  'Perfecto, te aviso cuando llegue.',
-  'Recibido, gracias por la información.',
-  '¡Listo! Ya tengo tu paquete.'
-];
-
-function addMessage(text, who){
-  const div = document.createElement('div');
-  div.className = 'msg ' + who;
-  const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
-  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
-  chatBody.appendChild(div);
-  chatBody.scrollTop = chatBody.scrollHeight;
-}
-
-function escapeHtml(str){
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
-}
-
-// Actualiza la cabecera del chat con el repartidor asignado y envía
-// un primer mensaje suyo confirmando que va en camino, incluyendo la
-// referencia de la dirección y el teléfono de contacto si se indicaron.
-function asignarRepartidorAlChat(courier, etaMin){
-  const veh = VEHICLES[courier.vehicle];
-  document.querySelector('.chat-avatar').textContent = courier.name.slice(0,2).toUpperCase();
-  document.querySelector('.chat-who .nm').textContent = `${courier.name} · Repartidor`;
-  document.querySelector('.chat-who .role').innerHTML = `● En camino · ${veh.label} · ~${etaMin} min`;
-  addMessage(`¡Hola! Soy ${courier.name}, voy en ${veh.label.toLowerCase()} ${veh.icon} hacia el punto de recogida. Llego en unos ${etaMin} minutos.`, 'them');
-
-  const ref = document.getElementById('addrDetail').value.trim();
-  const tel = document.getElementById('recipientPhone').value.trim();
-  if (ref || tel) {
-    let extra = 'Para la entrega: ';
-    if (ref) extra += `${ref}`;
-    if (ref && tel) extra += ' · ';
-    if (tel) extra += `Tel. de contacto ${tel}`;
-    addMessage(extra, 'me');
-  }
-}
-
-// mensaje inicial
-addMessage('Hola, ya estoy en camino para recoger tu pedido.', 'them');
-
-document.getElementById('btnSend').addEventListener('click', sendMessage);
-document.getElementById('chatInput').addEventListener('keypress', e => {
-  if (e.key === 'Enter') sendMessage();
-});
-
-async function sendMessage(){
-  const input = document.getElementById('chatInput');
-  const text = input.value.trim();
-  if (!text) return;
-  
-  const user = (await _supabase.auth.getUser()).data.user;
-  const orderId = activeDelivery ? activeDelivery.id : null;
-  
-  if (!orderId) {
-    // Si es el cliente, buscar su pedido activo
-    // (En una implementación completa se guardaría el pedido_id en el cliente)
-  }
-
-  const { error } = await _supabase
-    .from('chats')
-    .insert([{
-      pedido_id: orderId,
-      remitente_id: user.id,
-      mensaje: text
-    }]);
-
-  if (error) {
-    showToast('❌ Error al enviar mensaje');
-  } else {
-    addMessage(text, 'me');
-    input.value = '';
-  }
 }
 
 function subscribeToChat(orderId) {
@@ -2438,258 +2696,67 @@ function subscribeToChat(orderId) {
     .subscribe();
 }
 
-/* invalidar tamaño de mapa al cargar (por si el contenedor cambia) */
-window.addEventListener('load', () => setTimeout(() => { if (map) map.invalidateSize(); }, 200));
+/* ===================== CHAT ===================== */
 
-/* ===================== AUTENTICACIÓN (LOGIN / REGISTRO) ===================== */
-let currentUserId = null;   // id del usuario autenticado en Supabase
-let pendingRole = null;     // 'cliente' | 'mensajero' — rol elegido antes de autenticar
-let authMode = 'login';     // 'login' | 'register'
-
-const authModalEl   = document.getElementById('authModal');
-const authTitleEl   = document.getElementById('authTitle');
-const authSubEl     = document.getElementById('authSub');
-const authErrEl     = document.getElementById('authErr');
-const authRegFields = document.getElementById('authRegisterFields');
-const authSubmitBtn = document.getElementById('authSubmit');
-const authSwitchTxt = document.getElementById('authSwitchText');
-const authSwitchLnk = document.getElementById('authSwitchLink');
-
-function openAuthModal(role){
-  pendingRole = role;
-  authMode = 'login';
-  authErrEl.classList.remove('show');
-  authErrEl.textContent = '';
-  document.getElementById('authEmail').value = '';
-  document.getElementById('authPass').value = '';
-  document.getElementById('authNombre').value = '';
-  document.getElementById('authCarnet').value = '';
-  document.getElementById('authTelefono').value = '';
-  renderAuthMode();
-  authModalEl.classList.add('show');
-}
-
-function closeAuthModal(){
-  authModalEl.classList.remove('show');
-}
-
-function renderAuthMode(){
-  const roleTxt = pendingRole === 'mensajero' ? 'mensajero' : 'cliente';
-  if (authMode === 'login'){
-    authTitleEl.textContent = 'Iniciar sesión';
-    authSubEl.textContent = `Entra para continuar como ${roleTxt}`;
-    authRegFields.style.display = 'none';
-    authSubmitBtn.textContent = 'Iniciar sesión';
-    authSwitchTxt.textContent = '¿No tienes cuenta?';
-    authSwitchLnk.textContent = 'Regístrate';
-  } else {
-    authTitleEl.textContent = 'Crear cuenta';
-    authSubEl.textContent = `Regístrate para continuar como ${roleTxt}`;
-    authRegFields.style.display = '';
-    authSubmitBtn.textContent = 'Registrarme';
-    authSwitchTxt.textContent = '¿Ya tienes cuenta?';
-    authSwitchLnk.textContent = 'Inicia sesión';
-  }
-}
-
-document.getElementById('authClose').addEventListener('click', closeAuthModal);
-authSwitchLnk.addEventListener('click', () => {
-  authMode = authMode === 'login' ? 'register' : 'login';
-  authErrEl.classList.remove('show');
-  renderAuthMode();
+document.getElementById('btnSend').addEventListener('click', sendMessage);
+document.getElementById('chatInput').addEventListener('keypress', e => {
+  if (e.key === 'Enter') sendMessage();
 });
 
-// Crea (si no existe) la fila de perfil del usuario en la tabla
-// correspondiente a su rol ('clientes' o 'mensajeros').
-async function ensureProfileRow(role, userId, nombre, telefono, carnet){
-  const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
-  const payload = { id: userId, nombre: nombre || 'Usuario' };
-  if (carnet) payload.carnet = carnet;
-  if (role === 'mensajero') {
-    payload.telefono = telefono || null;
-    payload.disponible = false;
-    payload.vehiculo = 'moto';
-  } else {
-    payload.telefono = telefono || null;
-  }
-  // upsert: si ya existe la fila (login), no la sobreescribe con datos vacíos
-  await _supabase.from(table).upsert(payload, { onConflict: 'id', ignoreDuplicates: true });
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  
+  addMessage(text, 'me');
+  input.value = '';
+  
+  // Respuesta automática del repartidor
+  setTimeout(() => {
+    const respuestas = [
+      'Claro, voy en camino 🚴',
+      'Estoy a unos 5 minutos de la recogida.',
+      'Perfecto, te aviso cuando llegue.',
+      'Recibido, gracias por la información.',
+      '¡Listo! Ya tengo tu paquete.'
+    ];
+    const random = respuestas[Math.floor(Math.random() * respuestas.length)];
+    addMessage(random, 'them');
+  }, 1000 + Math.random() * 2000);
 }
 
-authSubmitBtn.addEventListener('click', async () => {
-  const email = document.getElementById('authEmail').value.trim();
-  const pass  = document.getElementById('authPass').value.trim();
-  const nombre = document.getElementById('authNombre').value.trim();
-  const carnet = document.getElementById('authCarnet').value.trim();
-  const telefono = document.getElementById('authTelefono').value.trim();
+/* ===================== NAVEGACIÓN ENTRE VISTAS ===================== */
 
-  if (!email || !pass) {
-    authErrEl.textContent = 'Ingresa correo y contraseña';
-    authErrEl.classList.add('show');
-    return;
-  }
-  if (authMode === 'register' && !nombre) {
-    authErrEl.textContent = 'Ingresa tu nombre';
-    authErrEl.classList.add('show');
-    return;
-  }
-  if (authMode === 'register' && !carnet) {
-    authErrEl.textContent = 'Ingresa tu número de carnet de identidad';
-    authErrEl.classList.add('show');
-    return;
-  }
-  if (authMode === 'register' && !/^\d{11}$/.test(carnet)) {
-    authErrEl.textContent = 'El carnet de identidad debe tener 11 dígitos';
-    authErrEl.classList.add('show');
-    return;
-  }
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const nav = btn.closest('.bottom-nav');
+    nav.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.view).classList.add('active');
 
-  authSubmitBtn.disabled = true;
-  authSubmitBtn.textContent = authMode === 'login' ? 'Entrando...' : 'Creando cuenta...';
-  authErrEl.classList.remove('show');
-
-  try {
-    if (authMode === 'login') {
-      const { data, error } = await _supabase.auth.signInWithPassword({ email, password: pass });
-      if (error) throw error;
-      currentUserId = data.user.id;
-      await ensureProfileRow(pendingRole, currentUserId, nombre, telefono, carnet);
-    } else {
-      const { data, error } = await _supabase.auth.signUp({ email, password: pass });
-      if (error) throw error;
-      currentUserId = data.user ? data.user.id : null;
-      if (currentUserId) {
-        await ensureProfileRow(pendingRole, currentUserId, nombre, telefono, carnet);
-      } else {
-        // Confirmación por correo activada en Supabase: no hay sesión todavía
-        showToast('📩 Revisa tu correo para confirmar la cuenta');
-        authSubmitBtn.disabled = false;
-        renderAuthMode();
-        return;
-      }
+    if (btn.dataset.view === 'view-chat' || btn.dataset.view === 'view-chatmensajero') {
+      document.getElementById('chatBadge').style.display = 'none';
+      document.getElementById('chatBadgeMensajero').style.display = 'none';
     }
-
-    document.getElementById('view-role').classList.add('authenticated');
-    closeAuthModal();
-    showToast('✅ Sesión iniciada');
-    setRole(pendingRole);
-  } catch (err) {
-    authErrEl.textContent = err.message || 'Error de autenticación';
-    authErrEl.classList.add('show');
-  } finally {
-    authSubmitBtn.disabled = false;
-    renderAuthMode();
-  }
-});
-
-/* ===================== SELECCIÓN DE CUENTA ===================== */
-let userRole = null;          // 'cliente' | 'mensajero'
-let mensajeroMap = null;
-let mensajeroLayer = null;
-let mensajeroRangeCircle = null;
-let activeRouteLayer = null;
-let _activeRouteCalcId = 0;
-let mensajeroPos = null;
-let mensajeroVehiculo = 'moto';
-let mensajeroOrders = [];
-let activeDelivery = null;
-let deliveryHistory = []; // { id, cliente, pack, weight, km, costo, vehicle, completedAt }
-let histFilterPeriod = 'all';
-
-const PAQUETES = [
-  { label:'Pequeño', icon:'📦', extra:0 },
-  { label:'Mediano', icon:'🗃️', extra:1.50 },
-  { label:'Grande',  icon:'🧳', extra:3.00 }
-];
-
-document.querySelectorAll('.role-card').forEach(card => {
-  card.addEventListener('click', async () => {
-    if (document.getElementById('view-role').classList.contains('authenticated')) {
-      setRole(card.dataset.role);
-      return;
-    }
-    // Revisar si ya hay sesión activa en Supabase (recarga de página)
-    const { data: { user } } = await _supabase.auth.getUser();
-    if (user) {
-      currentUserId = user.id;
-      // Asegurar que exista la fila de perfil (clientes/mensajeros) también en este
-      // flujo de sesión ya activa, para evitar el error de "cliente_id no existe"
-      // al crear un pedido si la fila nunca llegó a crearse.
-      await ensureProfileRow(card.dataset.role, currentUserId, '', '');
-      document.getElementById('view-role').classList.add('authenticated');
-      setRole(card.dataset.role);
-      return;
-    }
-    openAuthModal(card.dataset.role);
+    setTimeout(() => {
+      if (map) map.invalidateSize();
+      if (mensajeroMap) mensajeroMap.invalidateSize();
+    }, 50);
   });
 });
 
-document.getElementById('btnLogout').addEventListener('click', async () => {
-  if (userRole === 'mensajero') stopWatchingMensajero();
-  await _supabase.auth.signOut();
-  currentUserId = null;
-  userRole = null;
-  document.getElementById('view-role').classList.remove('authenticated');
-  document.getElementById('app').classList.add('pre-role');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-role').classList.add('active');
-  showToast('👋 Sesión cerrada');
-});
-
-function setRole(role){
-  userRole = role;
-  document.getElementById('app').classList.remove('pre-role');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-
-  if (role === 'cliente') {
-    stopWatchingMensajero();   // detener GPS del mensajero al cambiar de cuenta
-    document.getElementById('navCliente').style.display = 'flex';
-    document.getElementById('navMensajero').style.display = 'none';
-    document.getElementById('view-pedido').classList.add('active');
-    document.querySelector('#navCliente .nav-btn[data-view="view-pedido"]').classList.add('active');
-    document.getElementById('roleBarLabel').textContent = '📦 Cuenta: Tengo un paquete';
-    resetChat('them', 'Carlos R. · Repartidor', '● En camino', 'CR', 'Hola, ya estoy en camino para recoger tu pedido.');
-    initClienteMap();
-    setTimeout(() => map.invalidateSize(), 100);
-  } else {
-    document.getElementById('navCliente').style.display = 'none';
-    document.getElementById('navMensajero').style.display = 'flex';
-    document.getElementById('view-mensajero').classList.add('active');
-    document.querySelector('#navMensajero .nav-btn[data-view="view-mensajero"]').classList.add('active');
-    document.getElementById('roleBarLabel').textContent = '🛵 Cuenta: Mensajero';
-    resetChat('them', 'Esperando pedido...', '● Sin pedido activo', '··', null);
-    initMensajeroMode();
-  }
-}
-
-// Reinicia el chat para que se ajuste a la cuenta activa
-function resetChat(who, name, role, initials, firstMsg){
-  document.querySelector('.chat-avatar').textContent = initials;
-  document.querySelector('.chat-who .nm').textContent = name;
-  document.querySelector('.chat-who .role').innerHTML = role;
-  chatBody.innerHTML = '';
-  if (firstMsg) addMessage(firstMsg, who);
-}
-
 /* ===================== MODO MENSAJERO ===================== */
 
-let mensajeroWatchId   = null;   // ID del watchPosition activo
-let mensajeroMarker    = null;   // marcador de posición en tiempo real
-let mensajeroAccCircle = null;   // círculo de precisión GPS
-let lastOrderGenLat    = null;   // lat cuando se generaron los pedidos actuales
-let lastOrderGenLng    = null;   // lng cuando se generaron los pedidos actuales
-const REGEN_DIST_KM    = 0.4;   // regenerar pedidos si el mensajero se movió > 400 m
-
-function initMensajeroMode(){
+function initMensajeroMode() {
   if (!mensajeroMap) {
     mensajeroMap = L.map('mapMensajero', {
-      zoomControl:false,
+      zoomControl: false,
       fadeAnimation: true,
       zoomAnimation: true,
       markerZoomAnimation: true,
       preferCanvas: true
-    }).setView([23.1136,-82.3666], 14);
+    }).setView([23.1136, -82.3666], 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       detectRetina: true,
@@ -2704,20 +2771,18 @@ function initMensajeroMode(){
   startWatchingMensajero();
 }
 
-// Construye (o actualiza) el marcador pulsante del mensajero en el mapa.
-function buildMensajeroIcon(){
+function buildMensajeroIcon() {
   return L.divIcon({
     html: `
       <div style="position:relative;width:22px;height:22px;">
         <div style="position:absolute;inset:0;border-radius:50%;background:rgba(137,233,0,0.25);animation:ripple 1.8s infinite ease-out;"></div>
         <div style="position:absolute;inset:3px;border-radius:50%;background:#222;border:2.5px solid #89e900;box-shadow:0 0 8px rgba(137,233,0,0.6);"></div>
       </div>`,
-    className: '', iconSize:[22,22], iconAnchor:[11,11]
+    className: '', iconSize: [22, 22], iconAnchor: [11, 11]
   });
 }
 
-// Inyecta la animación ripple del marcador si aún no está en el documento.
-function ensureRippleStyle(){
+function ensureRippleStyle() {
   if (document.getElementById('ripple-style')) return;
   const s = document.createElement('style');
   s.id = 'ripple-style';
@@ -2729,19 +2794,14 @@ function ensureRippleStyle(){
   document.head.appendChild(s);
 }
 
-// Inicia el seguimiento GPS continuo con máxima precisión.
-// Se llama una sola vez al activar el modo mensajero y sigue
-// corriendo aunque la vista cambie o la app pase a segundo plano
-// (dentro de los límites del navegador/SO).
-function startWatchingMensajero(){
-  if (!navigator.geolocation){
+function startWatchingMensajero() {
+  if (!navigator.geolocation) {
     mensajeroPos = { lat: 23.1136, lng: -82.3666 };
     onMensajeroPosUpdate(mensajeroPos, null);
     updateGpsStatusBar('error', 2);
     return;
   }
 
-  // Bloqueo conocido: Chrome no permite geolocalización en file://
   if (location.protocol === 'file:') {
     mensajeroPos = { lat: 23.1136, lng: -82.3666 };
     onMensajeroPosUpdate(mensajeroPos, null);
@@ -2758,14 +2818,13 @@ function startWatchingMensajero(){
 
   ensureRippleStyle();
 
-  if (mensajeroWatchId !== null){
+  if (mensajeroWatchId !== null) {
     navigator.geolocation.clearWatch(mensajeroWatchId);
     mensajeroWatchId = null;
   }
 
   requestWakeLock();
 
-  // Verificar permiso antes de watchPosition para dar mejor mensaje
   if (navigator.permissions) {
     navigator.permissions.query({ name: 'geolocation' }).then(result => {
       if (result.state === 'denied') {
@@ -2789,7 +2848,7 @@ function startWatchingMensajero(){
   }
 }
 
-function _doWatchPosition(){
+function _doWatchPosition() {
   document.getElementById('ordersList').innerHTML =
     '<div class="empty-result">📡 Obteniendo tu ubicación en tiempo real…</div>';
 
@@ -2815,7 +2874,6 @@ function _doWatchPosition(){
       showToast(msgs[err.code] || 'Error GPS');
 
       if (err.code === 3 && !mensajeroPos) {
-        // Timeout: reintentar con baja precisión
         navigator.geolocation.getCurrentPosition(
           pos => {
             mensajeroPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
@@ -2837,26 +2895,21 @@ function _doWatchPosition(){
   );
 }
 
-// Se ejecuta cada vez que llega una nueva posición GPS.
-function onMensajeroPosUpdate(pos, accuracyM){
-  // — Actualizar o crear marcador —
-  if (!mensajeroMarker){
+function onMensajeroPosUpdate(pos, accuracyM) {
+  if (!mensajeroMarker) {
     mensajeroMarker = L.marker(pos, { icon: buildMensajeroIcon(), zIndexOffset: 1000 })
       .addTo(mensajeroMap)
       .bindPopup('📍 Tu posición actual');
     mensajeroMap.setView(pos, 15);
   } else {
-    // Interpolar suavemente hacia la nueva posición
     animateMensajeroMarker(pos);
-    // Solo re-centrar si el mensajero se salió del área visible
-    if (!mensajeroMap.getBounds().contains(pos)){
+    if (!mensajeroMap.getBounds().contains(pos)) {
       mensajeroMap.panTo(pos, { animate: true, duration: 0.8 });
     }
   }
 
-  // — Círculo de precisión GPS —
-  if (accuracyM !== null){
-    if (!mensajeroAccCircle){
+  if (accuracyM !== null) {
+    if (!mensajeroAccCircle) {
       mensajeroAccCircle = L.circle(pos, {
         radius: accuracyM,
         color: '#89e900', weight: 1,
@@ -2867,131 +2920,125 @@ function onMensajeroPosUpdate(pos, accuracyM){
     }
   }
 
-  // — Barra de estado GPS —
   updateGpsStatusBar('ok', accuracyM);
 
-  // — Regenerar pedidos cercanos si el mensajero se desplazó
-  //   más de REGEN_DIST_KM desde la última generación —
-  if (!activeDelivery && document.getElementById('availToggle').checked){
+  if (!activeDelivery && document.getElementById('availToggle').checked) {
     const moved = (lastOrderGenLat !== null)
       ? haversineKm({ lat: lastOrderGenLat, lng: lastOrderGenLng }, pos)
       : Infinity;
-    if (moved > REGEN_DIST_KM){
+    if (moved > REGEN_DIST_KM) {
       lastOrderGenLat = pos.lat;
       lastOrderGenLng = pos.lng;
       generateMensajeroOrders(pos);
     }
   }
 
-  // — Persistir posición en Supabase para tiempo real (throttle 4s) —
   pushMensajeroLocation(pos);
 }
 
 let _lastLocPush = 0;
-async function pushMensajeroLocation(pos){
+
+async function pushMensajeroLocation(pos) {
   const now = Date.now();
-  if (now - _lastLocPush < 4000) return; // no saturar la red/DB
+  if (now - _lastLocPush < 4000) return;
   _lastLocPush = now;
-  if (!currentUserId) return;
+  if (!currentUser) return;
   try {
     await _supabase.from('mensajeros').update({
       lat: pos.lat,
       lng: pos.lng,
       last_update: new Date().toISOString()
-    }).eq('id', currentUserId);
+    }).eq('id', currentUser.user.id);
   } catch (err) {
     console.warn('No se pudo actualizar la ubicación en Supabase:', err.message);
   }
 }
 
-
-// Muestra / actualiza una pequeña barra de estado GPS encima del panel.
-function updateGpsStatusBar(status, detail){
+function updateGpsStatusBar(status, detail) {
   let bar = document.getElementById('gpsStatusBar');
-  if (!bar){
+  if (!bar) {
     bar = document.createElement('div');
     bar.id = 'gpsStatusBar';
     bar.style.cssText =
       'padding:5px 16px;font-size:0.7rem;font-weight:700;display:flex;align-items:center;' +
       'gap:6px;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,0.08);' +
       'background:rgba(22,22,22,0.7);backdrop-filter:blur(8px);';
-    // Insertar justo antes del panel del mensajero
     const panel = document.querySelector('#view-mensajero .panel');
     if (panel) panel.parentNode.insertBefore(bar, panel);
   }
-  if (status === 'ok'){
+  if (status === 'ok') {
     const accTxt = (detail !== null && detail < 5000)
       ? `±${detail < 1000 ? Math.round(detail)+'m' : (detail/1000).toFixed(1)+'km'}`
       : '';
     bar.innerHTML = `<span style="color:#89e900;font-size:0.75rem;">●</span>
       <span style="color:rgba(255,255,255,0.7);">GPS activo · posición en tiempo real ${accTxt}</span>`;
   } else {
-    const msgs = { 1:'Permiso denegado', 2:'Señal GPS no disponible', 3:'Tiempo de espera agotado' };
+    const msgs = { 1: 'Permiso denegado', 2: 'Señal GPS no disponible', 3: 'Tiempo de espera agotado' };
     bar.innerHTML = `<span style="color:#ff6b6b;font-size:0.75rem;">●</span>
       <span style="color:rgba(255,255,255,0.6);">GPS: ${msgs[detail] || 'Error de localización'} — usando posición aproximada</span>`;
   }
 }
 
-// Detiene el seguimiento GPS (al cambiar a cuenta cliente o cerrar sesión).
-function stopWatchingMensajero(){
-  if (mensajeroWatchId !== null){
+function stopWatchingMensajero() {
+  if (mensajeroWatchId !== null) {
     navigator.geolocation.clearWatch(mensajeroWatchId);
     mensajeroWatchId = null;
   }
-  if (mensajeroMarker){ mensajeroMap && mensajeroMap.removeLayer(mensajeroMarker); mensajeroMarker = null; }
-  if (mensajeroAccCircle){ mensajeroMap && mensajeroMap.removeLayer(mensajeroAccCircle); mensajeroAccCircle = null; }
+  if (mensajeroMarker) { mensajeroMap && mensajeroMap.removeLayer(mensajeroMarker); mensajeroMarker = null; }
+  if (mensajeroAccCircle) { mensajeroMap && mensajeroMap.removeLayer(mensajeroAccCircle); mensajeroAccCircle = null; }
   lastOrderGenLat = null;
   lastOrderGenLng = null;
   releaseWakeLock();
   stopBackgroundNotification();
 }
 
-/* ===================== WAKE LOCK (pantalla encendida) =====================
-   Mantiene la pantalla activa mientras el mensajero está disponible, para
-   que el GPS no se detenga por timeout de pantalla.                        */
+let _animFrame = null;
+let _fromPos = null;
+let _toPos = null;
+let _animStart = null;
+const ANIM_MS = 800;
+
+function animateMensajeroMarker(toPos) {
+  if (!mensajeroMarker) return;
+  const from = mensajeroMarker.getLatLng();
+  _fromPos = { lat: from.lat, lng: from.lng };
+  _toPos = toPos;
+  _animStart = performance.now();
+  if (_animFrame) cancelAnimationFrame(_animFrame);
+  _stepMarker();
+}
+
+function _stepMarker() {
+  const elapsed = performance.now() - _animStart;
+  const t = Math.min(elapsed / ANIM_MS, 1);
+  const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+  const lat = _fromPos.lat + (_toPos.lat - _fromPos.lat) * ease;
+  const lng = _fromPos.lng + (_toPos.lng - _fromPos.lng) * ease;
+  mensajeroMarker.setLatLng([lat, lng]);
+  if (t < 1) _animFrame = requestAnimationFrame(_stepMarker);
+}
+
 let wakeLock = null;
 
-async function requestWakeLock(){
+async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
   try {
     wakeLock = await navigator.wakeLock.request('screen');
     wakeLock.addEventListener('release', () => {
-      // El SO liberó el wake lock (ej: batería baja). Lo pedimos de nuevo
-      // si el mensajero sigue activo y la pantalla vuelve a estar visible.
       wakeLock = null;
     });
-  } catch(e){ /* navegador o SO no lo permiten, GPS sigue igual */ }
+  } catch (e) { /* ignorar */ }
 }
 
-function releaseWakeLock(){
-  if (wakeLock){ wakeLock.release().catch(()=>{}); wakeLock = null; }
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
 }
 
-// Listener único de visibilidad que gestiona GPS, wake lock y notificación
-// de fondo. Se mantiene un solo handler para evitar duplicados y dejar claro
-// el flujo completo al entrar/salir de primer plano.
-document.addEventListener('visibilitychange', async () => {
-  if (userRole !== 'mensajero') return;
-
-  if (document.visibilityState === 'visible') {
-    // App regresa a primer plano
-    if (mensajeroWatchId === null) startWatchingMensajero();
-    if (!wakeLock) await requestWakeLock();
-    stopBackgroundNotification();
-  } else {
-    // App pasa a segundo plano
-    await startBackgroundNotification();
-  }
-});
-
-/* ===================== NOTIFICACIÓN DE FONDO =====================
-   Muestra una notificación persistente cuando el mensajero está activo
-   y la app pasa a segundo plano, para que el sistema no la mate.     */
 let bgNotif = null;
 
-async function startBackgroundNotification(){
+async function startBackgroundNotification() {
   if (!('Notification' in window)) return;
-  if (Notification.permission === 'default'){
+  if (Notification.permission === 'default') {
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') return;
   }
@@ -3000,55 +3047,27 @@ async function startBackgroundNotification(){
   bgNotif = new Notification('🛵 Hasta el Gao · Mensajero activo', {
     body: 'Tu GPS está activo. Estás recibiendo pedidos cercanos.',
     icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="%2389e900"/><text x="8" y="24" font-size="20">🛵</text></svg>',
-    tag:  'mensajero-bg',
+    tag: 'mensajero-bg',
     requireInteraction: false,
     silent: true
   });
 }
 
-function stopBackgroundNotification(){
-  if (bgNotif){ bgNotif.close(); bgNotif = null; }
+function stopBackgroundNotification() {
+  if (bgNotif) { bgNotif.close(); bgNotif = null; }
 }
 
-// (listener único de visibilitychange unificado arriba — wake lock + GPS + notificación)
+document.addEventListener('visibilitychange', async () => {
+  if (userRole !== 'mensajero') return;
 
-/* ===================== INTERPOLACIÓN DE MOVIMIENTO =====================
-   Cuando llega una nueva posición GPS, en vez de teletransportar el
-   marcador, lo animamos suavemente hacia la nueva coordenada para una
-   experiencia visual más fluida.                                        */
-let _animFrame = null;
-let _fromPos   = null;
-let _toPos     = null;
-let _animStart = null;
-const ANIM_MS  = 800; // duración de la interpolación en ms
-
-function animateMensajeroMarker(toPos){
-  if (!mensajeroMarker) return;
-  const from = mensajeroMarker.getLatLng();
-  _fromPos   = { lat: from.lat, lng: from.lng };
-  _toPos     = toPos;
-  _animStart = performance.now();
-  if (_animFrame) cancelAnimationFrame(_animFrame);
-  _stepMarker();
-}
-
-function _stepMarker(){
-  const elapsed = performance.now() - _animStart;
-  const t = Math.min(elapsed / ANIM_MS, 1);
-  const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // easeInOutQuad
-  const lat = _fromPos.lat + (_toPos.lat - _fromPos.lat) * ease;
-  const lng = _fromPos.lng + (_toPos.lng - _fromPos.lng) * ease;
-  mensajeroMarker.setLatLng([lat, lng]);
-  if (t < 1) _animFrame = requestAnimationFrame(_stepMarker);
-}
-
-function afterMensajeroLocated(){
-  // Función de compatibilidad — ya no se usa directamente;
-  // onMensajeroPosUpdate maneja todo el flujo de actualización.
-  if (mensajeroPos && document.getElementById('availToggle').checked && !activeDelivery){
-    generateMensajeroOrders(mensajeroPos);
+  if (document.visibilityState === 'visible') {
+    if (mensajeroWatchId === null) startWatchingMensajero();
+    if (!wakeLock) await requestWakeLock();
+    stopBackgroundNotification();
+  } else {
+    await startBackgroundNotification();
   }
-}
+});
 
 /* Selector de vehículo del mensajero */
 document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card => {
@@ -3059,7 +3078,7 @@ document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card =>
     if (mensajeroPos && document.getElementById('availToggle').checked && !activeDelivery) {
       generateMensajeroOrders(mensajeroPos);
     }
-    if (activeDelivery) renderActiveDelivery(); // refleja el nuevo pago estimado
+    if (activeDelivery) renderActiveDelivery();
   });
 });
 
@@ -3067,9 +3086,8 @@ document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card =>
 document.getElementById('availToggle').addEventListener('change', async (e) => {
   const on = e.target.checked;
   
-  const user = (await _supabase.auth.getUser()).data.user;
-  if (user) {
-    await _supabase.from('mensajeros').update({ disponible: on }).eq('id', user.id);
+  if (currentUser) {
+    await _supabase.from('mensajeros').update({ disponible: on }).eq('id', currentUser.user.id);
   }
 
   document.getElementById('ordersSection').style.display = on ? '' : 'none';
@@ -3082,16 +3100,20 @@ document.getElementById('availToggle').addEventListener('change', async (e) => {
   }
 });
 
-// Genera pedidos pendientes con punto de recogida dentro del rango
-// (RANGO_KM) alrededor de la posición del mensajero.
-async function generateMensajeroOrders(center){
+const PAQUETES = [
+  { label: 'Pequeño', icon: '📦', extra: 0 },
+  { label: 'Mediano', icon: '🗃️', extra: 1.50 },
+  { label: 'Grande', icon: '🧳', extra: 3.00 }
+];
+
+async function generateMensajeroOrders(center) {
   mensajeroOrders = [];
   try {
     const { data, error } = await _supabase
       .from('pedidos')
       .select('*, clientes(nombre)')
       .eq('estado', 'buscando')
-      .eq('vehiculo_tipo', mensajeroVehiculo); // solo pedidos del mismo tipo de vehículo que el mensajero
+      .eq('vehiculo_tipo', mensajeroVehiculo);
       
     if (error) throw error;
     
@@ -3120,7 +3142,7 @@ async function generateMensajeroOrders(center){
   renderMensajeroOrders(center);
 }
 
-function renderMensajeroOrders(center){
+function renderMensajeroOrders(center) {
   mensajeroLayer.clearLayers();
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
   mensajeroRangeCircle = L.circle(center, {
@@ -3130,7 +3152,7 @@ function renderMensajeroOrders(center){
 
   const pickupIcon = L.divIcon({
     html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #89e900;box-shadow:0 1px 4px rgba(0,0,0,.25)">📦</div>',
-    className: '', iconSize:[26,26], iconAnchor:[13,13]
+    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
   });
 
   mensajeroOrders.forEach(o => {
@@ -3142,14 +3164,14 @@ function renderMensajeroOrders(center){
   renderOrdersList();
 }
 
-function renderOrdersList(){
+function renderOrdersList() {
   const list = document.getElementById('ordersList');
-  if (mensajeroOrders.length === 0){
+  if (mensajeroOrders.length === 0) {
     list.innerHTML = '<div class="empty-result">No hay pedidos disponibles cerca por ahora.</div>';
     return;
   }
   list.innerHTML = mensajeroOrders.map(o => {
-    const distTxt = (o.distPickup*1000) < 1000 ? `${(o.distPickup*1000).toFixed(0)} m` : `${o.distPickup.toFixed(1)} km`;
+    const distTxt = (o.distPickup * 1000) < 1000 ? `${(o.distPickup * 1000).toFixed(0)} m` : `${o.distPickup.toFixed(1)} km`;
     return `
     <div class="order-card">
       <div class="oc-top">
@@ -3174,7 +3196,7 @@ function renderOrdersList(){
       const order = mensajeroOrders.find(o => o.id === btn.dataset.id);
       if (!order) return;
       if (btn.dataset.action === 'ver') {
-        mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding:[30,30] });
+        mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
       } else {
         aceptarPedido(order);
       }
@@ -3182,18 +3204,17 @@ function renderOrdersList(){
   });
 }
 
-async function aceptarPedido(order){
-  const user = (await _supabase.auth.getUser()).data.user;
-  if (!user) return;
+async function aceptarPedido(order) {
+  if (!currentUser) return;
 
   const { data: aceptado, error } = await _supabase
     .from('pedidos')
-    .update({ 
-      estado: 'aceptado', 
-      mensajero_id: user.id 
+    .update({
+      estado: 'aceptado',
+      mensajero_id: currentUser.user.id
     })
     .eq('id', order.id)
-    .eq('estado', 'buscando') // evita aceptar un pedido que otro repartidor ya tomó
+    .eq('estado', 'buscando')
     .select();
 
   if (error) {
@@ -3219,23 +3240,19 @@ async function aceptarPedido(order){
   renderActiveDelivery();
   drawActiveRoute();
 
-  resetChat('them', `${order.cliente} · Cliente`, '● Pedido en curso', order.cliente.slice(0,2).toUpperCase(), null);
-  addMessage(`He aceptado tu pedido y voy en camino a recogerlo.`, 'me');
+  resetChat('them', `${order.cliente} · Cliente`, '● Pedido en curso', order.cliente.slice(0, 2).toUpperCase(), null);
+  addMessage('He aceptado tu pedido y voy en camino a recogerlo.', 'me');
   showToast(`Pedido de ${order.cliente} aceptado`);
   
-  // Suscribirse al chat en tiempo real
   subscribeToChat(order.id);
 }
 
-// Pide a OSRM la ruta óptima (menor duración) entre dos puntos y la
-// dibuja en el layer indicado. Si falla, cae de vuelta a una línea recta.
-async function drawOsrmLeg(layer, from, to, style, fallbackStyle){
+async function drawOsrmLeg(layer, from, to, style, fallbackStyle) {
   try {
     const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&alternatives=true&steps=false`;
     const res = await fetch(url);
     const data = await res.json();
     if (data.routes && data.routes.length) {
-      // Elegir siempre la ruta de menor duración estimada (la óptima)
       const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
       const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
       L.polyline(coords, style).addTo(layer);
@@ -3247,45 +3264,41 @@ async function drawOsrmLeg(layer, from, to, style, fallbackStyle){
   }
 }
 
-async function drawActiveRoute(){
+async function drawActiveRoute() {
   if (activeRouteLayer) mensajeroMap.removeLayer(activeRouteLayer);
   activeRouteLayer = L.featureGroup().addTo(mensajeroMap);
 
-  // ID de esta llamada, para descartar resultados desfasados si el
-  // mensajero acepta otro pedido antes de que responda OSRM.
   const myId = ++_activeRouteCalcId;
-  const pickup  = activeDelivery.pickup;
+  const pickup = activeDelivery.pickup;
   const dropoff = activeDelivery.dropoff;
-  const from    = mensajeroPos;
+  const from = mensajeroPos;
 
   L.marker(dropoff, { icon: destIcon }).bindPopup('Punto de entrega').addTo(activeRouteLayer);
-  mensajeroMap.fitBounds(L.latLngBounds([from, pickup, dropoff]), { padding:[30,30] });
+  mensajeroMap.fitBounds(L.latLngBounds([from, pickup, dropoff]), { padding: [30, 30] });
 
-  // Tramo 1: mensajero → punto de recogida (ruta óptima por calles)
   await drawOsrmLeg(
     activeRouteLayer, from, pickup,
-    { color:'#89e900', weight:4, opacity:0.9 },
-    { color:'#89e900', weight:4, opacity:0.9, dashArray:'2 8' }
-  );
-  if (myId !== _activeRouteCalcId) return; // se reemplazó por otro pedido
-
-  // Tramo 2: recogida → punto de entrega (ruta óptima por calles)
-  await drawOsrmLeg(
-    activeRouteLayer, pickup, dropoff,
-    { color:'rgba(137,233,0,0.65)', weight:4, dashArray:'6 6' },
-    { color:'rgba(137,233,0,0.5)', weight:4, dashArray:'6 6' }
+    { color: '#89e900', weight: 4, opacity: 0.9 },
+    { color: '#89e900', weight: 4, opacity: 0.9, dashArray: '2 8' }
   );
   if (myId !== _activeRouteCalcId) return;
 
-  mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding:[30,30] });
+  await drawOsrmLeg(
+    activeRouteLayer, pickup, dropoff,
+    { color: 'rgba(137,233,0,0.65)', weight: 4, dashArray: '6 6' },
+    { color: 'rgba(137,233,0,0.5)', weight: 4, dashArray: '6 6' }
+  );
+  if (myId !== _activeRouteCalcId) return;
+
+  mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [30, 30] });
 }
 
-function renderActiveDelivery(){
+function renderActiveDelivery() {
   const box = document.getElementById('activeDeliveryBox');
   const o = activeDelivery;
   const veh = VEHICLES[mensajeroVehiculo];
 
-  if (o.status === 'recogida'){
+  if (o.status === 'recogida') {
     box.innerHTML = `
       <div class="active-card">
         <div class="ac-title"><span>${veh.icon} Pedido de ${o.cliente}</span><span class="ac-status">Hacia recogida</span></div>
@@ -3298,7 +3311,7 @@ function renderActiveDelivery(){
       addMessage('Ya recogí el paquete, voy hacia el destino.', 'me');
       showToast('Pedido recogido, en camino a la entrega');
     });
-  } else if (o.status === 'entrega'){
+  } else if (o.status === 'entrega') {
     box.innerHTML = `
       <div class="active-card">
         <div class="ac-title"><span>${veh.icon} Pedido de ${o.cliente}</span><span class="ac-status">Hacia entrega</span></div>
@@ -3309,13 +3322,11 @@ function renderActiveDelivery(){
       showToast(`¡Entrega completada! Ganaste $${o.costo.total.toFixed(2)}`);
       addMessage('Tu pedido fue entregado. ¡Gracias!', 'me');
 
-      // Avisa al cliente en tiempo real que su encargo finalizó
       if (o.id) {
         _supabase.from('pedidos').update({ estado: 'completado' }).eq('id', o.id)
           .then(({ error }) => { if (error) console.error('Error al marcar completado:', error); });
       }
 
-      // Guardar en el historial de entregas
       registrarEntregaEnHistorial(o);
 
       activeDelivery = null;
@@ -3331,9 +3342,9 @@ function renderActiveDelivery(){
   }
 }
 
-/* ===================== HISTORIAL DE ENTREGAS (MENSAJERO) ===================== */
+/* ===================== HISTORIAL DE ENTREGAS ===================== */
 
-function registrarEntregaEnHistorial(order){
+function registrarEntregaEnHistorial(order) {
   const entry = {
     id: order.id || ('h' + Date.now()),
     cliente: order.cliente,
@@ -3344,40 +3355,39 @@ function registrarEntregaEnHistorial(order){
     vehicle: mensajeroVehiculo,
     completedAt: new Date().toISOString()
   };
-  deliveryHistory.unshift(entry); // las más recientes primero
+  deliveryHistory.unshift(entry);
 
-  // Indicador visual de nuevo registro en el botón de nav "Historial"
   const badge = document.getElementById('historialBadge');
   if (badge) badge.style.display = 'block';
 
   renderHistorial();
 }
 
-function filtrarHistorialPorPeriodo(items, periodo){
+function filtrarHistorialPorPeriodo(items, periodo) {
   if (periodo === 'all') return items;
   const ahora = new Date();
   return items.filter(it => {
     const fecha = new Date(it.completedAt);
-    if (periodo === 'today'){
+    if (periodo === 'today') {
       return fecha.toDateString() === ahora.toDateString();
     }
-    if (periodo === 'week'){
+    if (periodo === 'week') {
       const inicioSemana = new Date(ahora);
       inicioSemana.setDate(ahora.getDate() - ahora.getDay());
-      inicioSemana.setHours(0,0,0,0);
+      inicioSemana.setHours(0, 0, 0, 0);
       return fecha >= inicioSemana;
     }
     return true;
   });
 }
 
-function renderHistorial(){
-  const statsBox   = document.getElementById('histStats');
-  const filterBox  = document.getElementById('histFilter');
-  const list       = document.getElementById('historialList');
+function renderHistorial() {
+  const statsBox = document.getElementById('histStats');
+  const filterBox = document.getElementById('histFilter');
+  const list = document.getElementById('historialList');
 
-  if (deliveryHistory.length === 0){
-    statsBox.style.display  = 'none';
+  if (deliveryHistory.length === 0) {
+    statsBox.style.display = 'none';
     filterBox.style.display = 'none';
     list.innerHTML = `
       <div class="hist-empty">
@@ -3388,20 +3398,18 @@ function renderHistorial(){
     return;
   }
 
-  statsBox.style.display  = 'flex';
+  statsBox.style.display = 'flex';
   filterBox.style.display = 'flex';
 
   const filtrado = filtrarHistorialPorPeriodo(deliveryHistory, histFilterPeriod);
 
-  // ---- Estadísticas (sobre el conjunto filtrado) ----
   const totalGanado = filtrado.reduce((sum, it) => sum + it.costo.total, 0);
-  const totalKm     = filtrado.reduce((sum, it) => sum + it.km, 0);
+  const totalKm = filtrado.reduce((sum, it) => sum + it.km, 0);
   document.getElementById('hstatTotal').textContent = `$${totalGanado.toFixed(2)}`;
   document.getElementById('hstatCount').textContent = filtrado.length;
-  document.getElementById('hstatKm').textContent     = `${totalKm.toFixed(1)} km`;
+  document.getElementById('hstatKm').textContent = `${totalKm.toFixed(1)} km`;
 
-  // ---- Lista ----
-  if (filtrado.length === 0){
+  if (filtrado.length === 0) {
     list.innerHTML = `
       <div class="hist-empty">
         <div class="hist-empty-icon">🗂️</div>
@@ -3414,8 +3422,8 @@ function renderHistorial(){
   list.innerHTML = filtrado.map(it => {
     const veh = VEHICLES[it.vehicle] || VEHICLES.moto;
     const fecha = new Date(it.completedAt);
-    const fechaTxt = fecha.toLocaleDateString('es-ES', { day:'2-digit', month:'short' });
-    const horaTxt  = fecha.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' });
+    const fechaTxt = fecha.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+    const horaTxt = fecha.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     return `
     <div class="hist-card">
       <div class="hist-card-icon">${veh.icon}</div>
@@ -3433,7 +3441,6 @@ function renderHistorial(){
   }).join('');
 }
 
-// Filtros de periodo (Todo / Hoy / Esta semana)
 document.querySelectorAll('.hfil-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.hfil-btn').forEach(b => b.classList.remove('active'));
@@ -3443,12 +3450,21 @@ document.querySelectorAll('.hfil-btn').forEach(btn => {
   });
 });
 
-// Quitar el badge de "nuevo" al entrar a la vista de historial
 document.querySelector('#navMensajero .nav-btn[data-view="view-historial-mensajero"]')
   .addEventListener('click', () => {
     const badge = document.getElementById('historialBadge');
     if (badge) badge.style.display = 'none';
   });
+
+/* ===================== INICIALIZACIÓN GLOBAL ===================== */
+
+document.addEventListener('DOMContentLoaded', initApp);
+
+// Asegurar que los mapas se redibujen cuando cambie el tamaño
+window.addEventListener('resize', () => {
+  if (map) setTimeout(() => map.invalidateSize(), 200);
+  if (mensajeroMap) setTimeout(() => mensajeroMap.invalidateSize(), 200);
+});
 
 </script>
 </body>
