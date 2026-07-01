@@ -751,6 +751,36 @@ const AuthService = {
     font-weight:800; font-size:0.72rem; cursor:pointer; font-family:'Inter';
   }
 
+  /* -------- MODAL PERFIL -------- */
+  .modal-overlay{
+    display:none; position:fixed; inset:0; z-index:500;
+    background:rgba(8,8,8,0.72); backdrop-filter: var(--blur-sm);
+    align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-overlay.active{ display:flex; }
+  .modal-box{
+    width:min(360px, 100%);
+    background: var(--panel-bg, #161616);
+    border:1px solid var(--glass-line);
+    border-radius:18px;
+    padding:20px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.5);
+  }
+  .perfil-avatar{
+    width:56px; height:56px; border-radius:50%;
+    background: linear-gradient(135deg, var(--kiwi), #4a8f00);
+    color:#0d0d0d; font-family:'Sora'; font-weight:800; font-size:1.1rem;
+    display:flex; align-items:center; justify-content:center;
+    margin:4px auto 16px;
+  }
+  .perfil-field{
+    display:flex; justify-content:space-between; align-items:center;
+    gap:10px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .perfil-field:last-of-type{ border-bottom:none; }
+  .pf-label{ font-size:0.72rem; color:var(--muted); font-weight:600; }
+  .pf-value{ font-size:0.8rem; color:var(--white); font-weight:700; text-align:right; }
+
   /* -------- SWITCH DISPONIBILIDAD -------- */
   .switch-row{
     background: var(--glass-1);
@@ -1409,7 +1439,43 @@ const AuthService = {
 
   <div class="role-bar" id="roleBar">
     <span id="roleBarLabel">📦 Cuenta: Cliente</span>
-    <button id="btnLogout">Cerrar sesión</button>
+    <div style="display:flex; gap:8px;">
+      <button id="btnPerfil">👤 Perfil</button>
+      <button id="btnLogout">Cerrar sesión</button>
+    </div>
+  </div>
+
+  <!-- MODAL: PERFIL DE USUARIO -->
+  <div class="modal-overlay" id="perfilOverlay">
+    <div class="modal-box">
+      <div class="panel-header">Mi perfil</div>
+      <div class="perfil-avatar" id="perfilAvatar">--</div>
+      <div class="perfil-field">
+        <span class="pf-label">Nombre</span>
+        <span class="pf-value" id="perfilNombre">—</span>
+      </div>
+      <div class="perfil-field">
+        <span class="pf-label">Cuenta</span>
+        <span class="pf-value" id="perfilRol">—</span>
+      </div>
+      <div class="perfil-field">
+        <span class="pf-label">Correo</span>
+        <span class="pf-value" id="perfilEmail">—</span>
+      </div>
+      <div class="perfil-field">
+        <span class="pf-label">Teléfono</span>
+        <span class="pf-value" id="perfilTelefono">—</span>
+      </div>
+      <div class="perfil-field">
+        <span class="pf-label">Carnet de identidad</span>
+        <span class="pf-value" id="perfilCarnet">—</span>
+      </div>
+      <div class="perfil-field" id="perfilVehiculoRow" style="display:none;">
+        <span class="pf-label">Vehículo</span>
+        <span class="pf-value" id="perfilVehiculo">—</span>
+      </div>
+      <button class="oc-btn primary" id="btnCerrarPerfil" style="width:100%; margin-top:14px;">Cerrar</button>
+    </div>
   </div>
 
   <!-- VISTA: PEDIDO -->
@@ -1998,9 +2064,46 @@ function setRole(role) {
   }
 }
 
+// ===================== PERFIL DE USUARIO =====================
+
+function abrirPerfil() {
+  const perfil = currentUser?.perfil || {};
+  const email = currentUser?.user?.email || '—';
+  const nombre = perfil.nombre || 'Usuario';
+  const esMensajero = userRole === 'mensajero';
+
+  document.getElementById('perfilAvatar').textContent = nombre.slice(0, 2).toUpperCase();
+  document.getElementById('perfilNombre').textContent = nombre;
+  document.getElementById('perfilRol').textContent = esMensajero ? '🛵 Mensajero' : '📦 Cliente';
+  document.getElementById('perfilEmail').textContent = email;
+  document.getElementById('perfilTelefono').textContent = perfil.telefono || 'No registrado';
+  document.getElementById('perfilCarnet').textContent = perfil.carnet || 'No registrado';
+
+  const vehiculoRow = document.getElementById('perfilVehiculoRow');
+  if (esMensajero) {
+    vehiculoRow.style.display = 'flex';
+    document.getElementById('perfilVehiculo').textContent = perfil.vehiculo === 'bici' ? '🚲 Bicicleta' : '🛵 Moto';
+  } else {
+    vehiculoRow.style.display = 'none';
+  }
+
+  document.getElementById('perfilOverlay').classList.add('active');
+}
+
+function cerrarPerfil() {
+  document.getElementById('perfilOverlay').classList.remove('active');
+}
+
+document.getElementById('btnPerfil').addEventListener('click', abrirPerfil);
+document.getElementById('btnCerrarPerfil').addEventListener('click', cerrarPerfil);
+document.getElementById('perfilOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'perfilOverlay') cerrarPerfil();
+});
+
 // ===================== CIERRE DE SESIÓN =====================
 
 document.getElementById('btnLogout').addEventListener('click', async () => {
+  cerrarPerfil();
   if (userRole === 'mensajero') stopWatchingMensajero();
   
   try {
