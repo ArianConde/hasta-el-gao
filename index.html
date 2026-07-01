@@ -15,7 +15,13 @@
 // Configuración de Supabase
 const SUPABASE_URL = 'https://undlrtxahworhpgjnfek.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVuZGxydHhhaHdvcmhwZ2puZmVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MjQwMDcsImV4cCI6MjA5ODQwMDAwN30.FnRkXN39qppLPtWDamcyf5tNgFf1020I8DFF2SVECW4';
-const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    storage: window.sessionStorage,
+    persistSession: true,
+    autoRefreshToken: true
+  }
+});
 const _supabase = supabaseClient;
 
 // ===================== AUTENTICACIÓN =====================
@@ -1321,7 +1327,7 @@ const AuthService = {
   <div class="view active" id="view-role">
     <div class="role-screen">
       <div class="role-logo-img">
-        <img class="logo-hero-img" src="assets/presentación.jpg" alt="Hasta el Gao">
+        <img class="logo-hero-img" src="assets/presentación.png" alt="Hasta el Gao">
       </div>
       <div class="brand-wordmark" style="margin-top:2px;margin-bottom:4px;">
         <div class="bw-tagline">— RÁPIDO · SEGURO · CONFIABLE —</div>
@@ -1713,8 +1719,6 @@ let _routeCalcId = 0;
 // Estado mensajero
 let mensajeroMap = null;
 let mensajeroLayer = null;
-let previewRouteLayer = null;
-let _previewRouteCalcId = 0;
 let mensajeroRangeCircle = null;
 let activeRouteLayer = null;
 let _activeRouteCalcId = 0;
@@ -3167,7 +3171,6 @@ function renderMensajeroOrders(center) {
   // Limpiar capas anteriores
   mensajeroLayer.clearLayers();
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
-  if (previewRouteLayer) { mensajeroMap.removeLayer(previewRouteLayer); previewRouteLayer = null; }
   
   // Dibujar círculo de rango
   mensajeroRangeCircle = L.circle(center, {
@@ -3179,6 +3182,10 @@ function renderMensajeroOrders(center) {
     html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #89e900;box-shadow:0 1px 4px rgba(0,0,0,.25)">📦</div>',
     className: '', iconSize: [26, 26], iconAnchor: [13, 13]
   });
+  const dropIcon = L.divIcon({
+    html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #ff5a5a;box-shadow:0 1px 4px rgba(0,0,0,.25)">🏁</div>',
+    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
+  });
 
   if (mensajeroOrders.length === 0) {
     // Mostrar mensaje de que no hay pedidos
@@ -3187,8 +3194,15 @@ function renderMensajeroOrders(center) {
   } else {
     mensajeroOrders.forEach(o => {
       L.marker(o.pickup, { icon: pickupIcon })
-        .bindPopup(`Recogida de <b>${o.cliente}</b><br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
+        .bindPopup(`Recogida de <b>${o.cliente}</b>${o.telefonoCliente ? '<br>📞 ' + o.telefonoCliente : ''}<br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
         .addTo(mensajeroLayer);
+      L.marker(o.dropoff, { icon: dropIcon })
+        .bindPopup(`Entrega${o.destinoTexto ? '<br>' + o.destinoTexto : ''}`)
+        .addTo(mensajeroLayer);
+      // Ruta real de recogida -> entrega, visible desde ya, antes de aceptar
+      drawOsrmLeg(mensajeroLayer, o.pickup, o.dropoff,
+        { color: '#89e900', weight: 3, opacity: 0.6, dashArray: '2 8' },
+        { color: 'rgba(137,233,0,0.5)', weight: 2, dashArray: '4 6', opacity: 0.6 });
     });
   }
 
@@ -3233,7 +3247,7 @@ function renderOrdersList() {
       const order = mensajeroOrders.find(o => o.id === btn.dataset.id);
       if (!order) return;
       if (btn.dataset.action === 'ver') {
-        previewOrderRoute(order);
+        mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
       } else {
         aceptarPedido(order);
       }
@@ -3266,8 +3280,6 @@ async function aceptarPedido(order) {
     return;
   }
 
-  if (previewRouteLayer) { mensajeroMap.removeLayer(previewRouteLayer); previewRouteLayer = null; }
-
   activeDelivery = order;
   activeDelivery.status = 'recogida';
   mensajeroOrders = mensajeroOrders.filter(o => o.id !== order.id);
@@ -3284,42 +3296,6 @@ async function aceptarPedido(order) {
   showToast(`Pedido de ${order.cliente} aceptado`);
   
   subscribeToChat(order.id);
-}
-
-async function previewOrderRoute(order) {
-  if (previewRouteLayer) mensajeroMap.removeLayer(previewRouteLayer);
-  previewRouteLayer = L.featureGroup().addTo(mensajeroMap);
-  const myId = ++_previewRouteCalcId;
-
-  const pickupIcon = L.divIcon({
-    html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #89e900;box-shadow:0 1px 4px rgba(0,0,0,.25)">📦</div>',
-    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
-  });
-  const dropIcon = L.divIcon({
-    html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #ff5a5a;box-shadow:0 1px 4px rgba(0,0,0,.25)">🏁</div>',
-    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
-  });
-
-  L.marker(order.pickup, { icon: pickupIcon })
-    .bindPopup(`Recogida de <b>${order.cliente}</b>${order.telefonoCliente ? '<br>📞 ' + order.telefonoCliente : ''}${order.origenTexto ? '<br>' + order.origenTexto : ''}`)
-    .addTo(previewRouteLayer);
-  L.marker(order.dropoff, { icon: dropIcon })
-    .bindPopup(`Entrega${order.destinoTexto ? '<br>' + order.destinoTexto : ''}`)
-    .addTo(previewRouteLayer);
-
-  mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
-
-  // Tramo hasta la recogida (donde estoy -> punto de recogida)
-  await drawOsrmLeg(previewRouteLayer, mensajeroPos, order.pickup,
-    { color: '#89e900', weight: 4, opacity: 0.9, dashArray: '2 8' },
-    { color: 'rgba(137,233,0,0.6)', weight: 3, dashArray: '6 6', opacity: 0.8 });
-  if (myId !== _previewRouteCalcId) return;
-
-  // Tramo de la entrega (recogida -> destino)
-  await drawOsrmLeg(previewRouteLayer, order.pickup, order.dropoff,
-    { color: '#ff5a5a', weight: 4, opacity: 0.9 },
-    { color: 'rgba(255,90,90,0.6)', weight: 3, dashArray: '6 6', opacity: 0.8 });
-  if (myId !== _previewRouteCalcId) return;
 }
 
 async function drawOsrmLeg(layer, from, to, style, fallbackStyle) {
