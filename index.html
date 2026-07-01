@@ -812,6 +812,8 @@ const AuthService = {
   .oc-top{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
   .oc-client{ font-weight:700; color:var(--white); font-size:0.88rem; font-family:'Sora'; }
   .oc-pay{ font-weight:800; color:var(--kiwi); font-size:1rem; font-family:'Sora'; text-shadow:0 0 10px var(--kiwi-glow); }
+  .oc-addr{ font-size:0.72rem; color:var(--muted); line-height:1.5; margin-bottom:10px; }
+  .oc-addr b{ color:var(--white); font-weight:600; }
   .oc-meta{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
   .oc-meta span{
     font-size:0.68rem;
@@ -1711,6 +1713,8 @@ let _routeCalcId = 0;
 // Estado mensajero
 let mensajeroMap = null;
 let mensajeroLayer = null;
+let previewRouteLayer = null;
+let _previewRouteCalcId = 0;
 let mensajeroRangeCircle = null;
 let activeRouteLayer = null;
 let _activeRouteCalcId = 0;
@@ -3110,7 +3114,7 @@ async function generateMensajeroOrders(center) {
     
     const { data, error } = await _supabase
       .from('pedidos')
-      .select('*, clientes(nombre)')
+      .select('*, clientes(nombre, telefono)')
       .eq('estado', 'buscando')
       .eq('vehiculo_tipo', mensajeroVehiculo);
       
@@ -3137,7 +3141,11 @@ async function generateMensajeroOrders(center) {
         
         mensajeroOrders.push({
           id: o.id,
-          cliente: o.clientes?.nombre || 'Cliente',
+          cliente: o.clientes?.nombre || 'Cliente sin nombre',
+          telefonoCliente: o.clientes?.telefono || o.telefono_contacto || '',
+          origenTexto: o.origen_texto || '',
+          destinoTexto: o.destino_texto || '',
+          referencia: o.referencia || '',
           pickup, dropoff,
           distPickup,
           km, pack, weight: o.peso_kg, costo
@@ -3159,6 +3167,7 @@ function renderMensajeroOrders(center) {
   // Limpiar capas anteriores
   mensajeroLayer.clearLayers();
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
+  if (previewRouteLayer) { mensajeroMap.removeLayer(previewRouteLayer); previewRouteLayer = null; }
   
   // Dibujar círculo de rango
   mensajeroRangeCircle = L.circle(center, {
@@ -3197,9 +3206,15 @@ function renderOrdersList() {
     return `
     <div class="order-card">
       <div class="oc-top">
-        <span class="oc-client">${o.cliente}</span>
+        <span class="oc-client">${o.cliente}${o.telefonoCliente ? ' · ' + o.telefonoCliente : ''}</span>
         <span class="oc-pay">$${o.costo.total.toFixed(2)}</span>
       </div>
+      ${(o.origenTexto || o.destinoTexto) ? `
+      <div class="oc-addr">
+        ${o.origenTexto ? `<div>📦 <b>Recoger:</b> ${o.origenTexto}</div>` : ''}
+        ${o.destinoTexto ? `<div>🏁 <b>Entregar:</b> ${o.destinoTexto}</div>` : ''}
+        ${o.referencia ? `<div>📝 ${o.referencia}</div>` : ''}
+      </div>` : ''}
       <div class="oc-meta">
         <span>${o.pack.icon} ${o.pack.label}</span>
         <span>⚖️ ${o.weight} kg</span>
@@ -3207,7 +3222,7 @@ function renderOrdersList() {
         <span>📍 Recogida a ${distTxt}</span>
       </div>
       <div class="oc-actions">
-        <button class="oc-btn ghost" data-action="ver" data-id="${o.id}">Ver en mapa</button>
+        <button class="oc-btn ghost" data-action="ver" data-id="${o.id}">Ver ruta</button>
         <button class="oc-btn primary" data-action="aceptar" data-id="${o.id}">Aceptar</button>
       </div>
     </div>`;
@@ -3218,7 +3233,7 @@ function renderOrdersList() {
       const order = mensajeroOrders.find(o => o.id === btn.dataset.id);
       if (!order) return;
       if (btn.dataset.action === 'ver') {
-        mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
+        previewOrderRoute(order);
       } else {
         aceptarPedido(order);
       }
@@ -3251,6 +3266,8 @@ async function aceptarPedido(order) {
     return;
   }
 
+  if (previewRouteLayer) { mensajeroMap.removeLayer(previewRouteLayer); previewRouteLayer = null; }
+
   activeDelivery = order;
   activeDelivery.status = 'recogida';
   mensajeroOrders = mensajeroOrders.filter(o => o.id !== order.id);
@@ -3267,6 +3284,42 @@ async function aceptarPedido(order) {
   showToast(`Pedido de ${order.cliente} aceptado`);
   
   subscribeToChat(order.id);
+}
+
+async function previewOrderRoute(order) {
+  if (previewRouteLayer) mensajeroMap.removeLayer(previewRouteLayer);
+  previewRouteLayer = L.featureGroup().addTo(mensajeroMap);
+  const myId = ++_previewRouteCalcId;
+
+  const pickupIcon = L.divIcon({
+    html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #89e900;box-shadow:0 1px 4px rgba(0,0,0,.25)">📦</div>',
+    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
+  });
+  const dropIcon = L.divIcon({
+    html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #ff5a5a;box-shadow:0 1px 4px rgba(0,0,0,.25)">🏁</div>',
+    className: '', iconSize: [26, 26], iconAnchor: [13, 13]
+  });
+
+  L.marker(order.pickup, { icon: pickupIcon })
+    .bindPopup(`Recogida de <b>${order.cliente}</b>${order.telefonoCliente ? '<br>📞 ' + order.telefonoCliente : ''}${order.origenTexto ? '<br>' + order.origenTexto : ''}`)
+    .addTo(previewRouteLayer);
+  L.marker(order.dropoff, { icon: dropIcon })
+    .bindPopup(`Entrega${order.destinoTexto ? '<br>' + order.destinoTexto : ''}`)
+    .addTo(previewRouteLayer);
+
+  mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
+
+  // Tramo hasta la recogida (donde estoy -> punto de recogida)
+  await drawOsrmLeg(previewRouteLayer, mensajeroPos, order.pickup,
+    { color: '#89e900', weight: 4, opacity: 0.9, dashArray: '2 8' },
+    { color: 'rgba(137,233,0,0.6)', weight: 3, dashArray: '6 6', opacity: 0.8 });
+  if (myId !== _previewRouteCalcId) return;
+
+  // Tramo de la entrega (recogida -> destino)
+  await drawOsrmLeg(previewRouteLayer, order.pickup, order.dropoff,
+    { color: '#ff5a5a', weight: 4, opacity: 0.9 },
+    { color: 'rgba(255,90,90,0.6)', weight: 3, dashArray: '6 6', opacity: 0.8 });
+  if (myId !== _previewRouteCalcId) return;
 }
 
 async function drawOsrmLeg(layer, from, to, style, fallbackStyle) {
