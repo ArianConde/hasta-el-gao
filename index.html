@@ -420,6 +420,17 @@ function shareLocation(messengerId, lat, lng) {
     min-width:46px; text-align:center;
     font-weight:700; color:var(--white); font-size:0.9rem;
   }
+  .wval-input{
+    min-width:46px; width:52px; text-align:center;
+    font-weight:700; color:var(--white); font-size:0.9rem;
+    font-family:'Inter', sans-serif;
+    background:transparent; border:none; outline:none;
+    -moz-appearance:textfield;
+  }
+  .wval-input::-webkit-outer-spin-button,
+  .wval-input::-webkit-inner-spin-button{
+    -webkit-appearance:none; margin:0;
+  }
 
   /* -------- RESULT CARD -------- */
   .result-card{
@@ -1286,6 +1297,10 @@ function shareLocation(messengerId, lat, lng) {
           <input type="text" id="authNombre" placeholder="Tu nombre">
         </div>
         <div class="authm-field">
+          <label>Carnet de identidad</label>
+          <input type="text" id="authCarnet" placeholder="Ej: 00000000000" inputmode="numeric" maxlength="11">
+        </div>
+        <div class="authm-field">
           <label>Teléfono</label>
           <input type="tel" id="authTelefono" placeholder="+53 5xxxxxxx">
         </div>
@@ -1329,7 +1344,10 @@ function shareLocation(messengerId, lat, lng) {
 
   <div class="role-bar" id="roleBar">
     <span id="roleBarLabel">📦 Cuenta: Cliente</span>
-    <button id="btnSwitchRole">Cambiar cuenta</button>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <button id="btnSwitchRole">Cambiar cuenta</button>
+      <button id="btnLogout">Cerrar sesión</button>
+    </div>
   </div>
 
   <!-- VISTA: PEDIDO -->
@@ -1436,7 +1454,7 @@ function shareLocation(messengerId, lat, lng) {
         </div>
         <div class="stepper">
           <button id="wMinus">−</button>
-          <span id="wVal">2 kg</span>
+          <input type="number" id="wVal" class="wval-input" value="2" min="1" max="50" step="1" inputmode="numeric"><span style="font-weight:700;color:var(--white);font-size:0.9rem;margin-left:-6px;">kg</span>
           <button id="wPlus">+</button>
         </div>
       </div>
@@ -1985,12 +2003,30 @@ document.querySelectorAll('#sizeOptions .size-card').forEach(card => {
 
 document.getElementById('wPlus').addEventListener('click', () => {
   weightKg = Math.min(weightKg + 1, 50);
-  document.getElementById('wVal').textContent = weightKg + ' kg';
+  document.getElementById('wVal').value = weightKg;
   updatePrice();
 });
 document.getElementById('wMinus').addEventListener('click', () => {
   weightKg = Math.max(weightKg - 1, 1);
-  document.getElementById('wVal').textContent = weightKg + ' kg';
+  document.getElementById('wVal').value = weightKg;
+  updatePrice();
+});
+
+// Permite escribir el peso directamente en el campo
+document.getElementById('wVal').addEventListener('input', () => {
+  const input = document.getElementById('wVal');
+  const val = parseInt(input.value, 10);
+  if (!isNaN(val)) {
+    weightKg = Math.min(Math.max(val, 1), 50);
+    updatePrice();
+  }
+});
+// Al salir del campo, corrige valores vacíos o inválidos
+document.getElementById('wVal').addEventListener('blur', () => {
+  const input = document.getElementById('wVal');
+  const val = parseInt(input.value, 10);
+  weightKg = isNaN(val) ? 1 : Math.min(Math.max(val, 1), 50);
+  input.value = weightKg;
   updatePrice();
 });
 
@@ -2043,6 +2079,18 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
   const user = (await _supabase.auth.getUser()).data.user;
   if (!user) {
     showToast('🔒 Debes iniciar sesión');
+    btn.disabled = false;
+    btn.textContent = 'Solicitar repartidor';
+    return;
+  }
+
+  // Garantiza que exista la fila del cliente antes de crear el pedido,
+  // para evitar el error de "cliente_id no existe" (foreign key).
+  const { error: profileError } = await _supabase
+    .from('clientes')
+    .upsert({ id: user.id, nombre: 'Usuario' }, { onConflict: 'id', ignoreDuplicates: true });
+  if (profileError) {
+    showToast('❌ Error al verificar tu perfil: ' + profileError.message);
     btn.disabled = false;
     btn.textContent = 'Solicitar repartidor';
     return;
@@ -2418,6 +2466,7 @@ function openAuthModal(role){
   document.getElementById('authEmail').value = '';
   document.getElementById('authPass').value = '';
   document.getElementById('authNombre').value = '';
+  document.getElementById('authCarnet').value = '';
   document.getElementById('authTelefono').value = '';
   renderAuthMode();
   authModalEl.classList.add('show');
@@ -2455,9 +2504,10 @@ authSwitchLnk.addEventListener('click', () => {
 
 // Crea (si no existe) la fila de perfil del usuario en la tabla
 // correspondiente a su rol ('clientes' o 'mensajeros').
-async function ensureProfileRow(role, userId, nombre, telefono){
+async function ensureProfileRow(role, userId, nombre, telefono, carnet){
   const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
   const payload = { id: userId, nombre: nombre || 'Usuario' };
+  if (carnet) payload.carnet = carnet;
   if (role === 'mensajero') {
     payload.telefono = telefono || null;
     payload.disponible = false;
@@ -2473,6 +2523,7 @@ authSubmitBtn.addEventListener('click', async () => {
   const email = document.getElementById('authEmail').value.trim();
   const pass  = document.getElementById('authPass').value.trim();
   const nombre = document.getElementById('authNombre').value.trim();
+  const carnet = document.getElementById('authCarnet').value.trim();
   const telefono = document.getElementById('authTelefono').value.trim();
 
   if (!email || !pass) {
@@ -2482,6 +2533,16 @@ authSubmitBtn.addEventListener('click', async () => {
   }
   if (authMode === 'register' && !nombre) {
     authErrEl.textContent = 'Ingresa tu nombre';
+    authErrEl.classList.add('show');
+    return;
+  }
+  if (authMode === 'register' && !carnet) {
+    authErrEl.textContent = 'Ingresa tu número de carnet de identidad';
+    authErrEl.classList.add('show');
+    return;
+  }
+  if (authMode === 'register' && !/^\d{11}$/.test(carnet)) {
+    authErrEl.textContent = 'El carnet de identidad debe tener 11 dígitos';
     authErrEl.classList.add('show');
     return;
   }
@@ -2495,13 +2556,13 @@ authSubmitBtn.addEventListener('click', async () => {
       const { data, error } = await _supabase.auth.signInWithPassword({ email, password: pass });
       if (error) throw error;
       currentUserId = data.user.id;
-      await ensureProfileRow(pendingRole, currentUserId, nombre, telefono);
+      await ensureProfileRow(pendingRole, currentUserId, nombre, telefono, carnet);
     } else {
       const { data, error } = await _supabase.auth.signUp({ email, password: pass });
       if (error) throw error;
       currentUserId = data.user ? data.user.id : null;
       if (currentUserId) {
-        await ensureProfileRow(pendingRole, currentUserId, nombre, telefono);
+        await ensureProfileRow(pendingRole, currentUserId, nombre, telefono, carnet);
       } else {
         // Confirmación por correo activada en Supabase: no hay sesión todavía
         showToast('📩 Revisa tu correo para confirmar la cuenta');
@@ -2553,6 +2614,10 @@ document.querySelectorAll('.role-card').forEach(card => {
     const { data: { user } } = await _supabase.auth.getUser();
     if (user) {
       currentUserId = user.id;
+      // Asegurar que exista la fila de perfil (clientes/mensajeros) también en este
+      // flujo de sesión ya activa, para evitar el error de "cliente_id no existe"
+      // al crear un pedido si la fila nunca llegó a crearse.
+      await ensureProfileRow(card.dataset.role, currentUserId, '', '');
       document.getElementById('view-role').classList.add('authenticated');
       setRole(card.dataset.role);
       return;
@@ -2567,6 +2632,18 @@ document.getElementById('btnSwitchRole').addEventListener('click', () => {
   document.getElementById('app').classList.add('pre-role');
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-role').classList.add('active');
+});
+
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  if (userRole === 'mensajero') stopWatchingMensajero();
+  await _supabase.auth.signOut();
+  currentUserId = null;
+  userRole = null;
+  document.getElementById('view-role').classList.remove('authenticated');
+  document.getElementById('app').classList.add('pre-role');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-role').classList.add('active');
+  showToast('👋 Sesión cerrada');
 });
 
 function setRole(role){
