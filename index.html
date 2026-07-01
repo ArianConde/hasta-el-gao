@@ -1250,14 +1250,7 @@ function shareLocation(messengerId, lat, lng) {
   <div class="view active" id="view-role">
     <div class="role-screen">
       <div class="role-logo-img">
-        <svg width="100%" height="auto" viewBox="0 0 400 120" style="display:block;background:#000;border-radius:22px;">
-          <rect width="400" height="120" fill="#000" rx="22"/>
-          <text x="20" y="50" font-family="Sora, sans-serif" font-size="28" font-weight="800" fill="#89e900">HASTA EL</text>
-          <text x="20" y="85" font-family="Sora, sans-serif" font-size="36" font-weight="800" fill="#ffffff" font-style="italic">GAO</text>
-          <text x="20" y="108" font-family="Inter, sans-serif" font-size="12" fill="rgba(255,255,255,0.5)" letter-spacing="2">RÁPIDO · SEGURO · CONFIABLE</text>
-          <circle cx="350" cy="60" r="30" fill="#89e900" opacity="0.15"/>
-          <text x="340" y="70" font-size="30">🛵</text>
-        </svg>
+        <img class="logo-hero-img" src="assets/presentación.jpg" alt="Hasta el Gao">
       </div>
       <div class="brand-wordmark" style="margin-top:2px;margin-bottom:4px;">
         <div class="bw-tagline">— RÁPIDO · SEGURO · CONFIABLE —</div>
@@ -1327,12 +1320,7 @@ function shareLocation(messengerId, lat, lng) {
   <header>
     <div class="brand">
       <div class="brand-mark">
-        <svg width="44" height="44" viewBox="0 0 44 44" style="display:block;">
-          <rect width="44" height="44" rx="13" fill="#89e900"/>
-          <text x="8" y="32" font-family="Sora, sans-serif" font-size="24" font-weight="800" fill="#000">G</text>
-          <circle cx="33" cy="12" r="6" fill="#000" opacity="0.2"/>
-          <text x="29" y="18" font-size="14">🛵</text>
-        </svg>
+        <img class="brand-mark-img" src="assets/logo.png" alt="Logo Hasta el Gao">
       </div>
       <div class="brand-text">
         <div class="name">HASTA EL <span style="color:var(--kiwi);font-style:italic;">GAO</span></div>
@@ -1344,10 +1332,7 @@ function shareLocation(messengerId, lat, lng) {
 
   <div class="role-bar" id="roleBar">
     <span id="roleBarLabel">📦 Cuenta: Cliente</span>
-    <div style="display:flex; align-items:center; gap:14px;">
-      <button id="btnSwitchRole">Cambiar cuenta</button>
-      <button id="btnLogout">Cerrar sesión</button>
-    </div>
+    <button id="btnLogout">Cerrar sesión</button>
   </div>
 
   <!-- VISTA: PEDIDO -->
@@ -2591,6 +2576,7 @@ let mensajeroMap = null;
 let mensajeroLayer = null;
 let mensajeroRangeCircle = null;
 let activeRouteLayer = null;
+let _activeRouteCalcId = 0;
 let mensajeroPos = null;
 let mensajeroVehiculo = 'moto';
 let mensajeroOrders = [];
@@ -2624,14 +2610,6 @@ document.querySelectorAll('.role-card').forEach(card => {
     }
     openAuthModal(card.dataset.role);
   });
-});
-
-document.getElementById('btnSwitchRole').addEventListener('click', () => {
-
-  if (userRole === 'mensajero') stopWatchingMensajero();
-  document.getElementById('app').classList.add('pre-role');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-role').classList.add('active');
 });
 
 document.getElementById('btnLogout').addEventListener('click', async () => {
@@ -3227,13 +3205,57 @@ async function aceptarPedido(order){
   subscribeToChat(order.id);
 }
 
-function drawActiveRoute(){
+// Pide a OSRM la ruta óptima (menor duración) entre dos puntos y la
+// dibuja en el layer indicado. Si falla, cae de vuelta a una línea recta.
+async function drawOsrmLeg(layer, from, to, style, fallbackStyle){
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&alternatives=true&steps=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.routes && data.routes.length) {
+      // Elegir siempre la ruta de menor duración estimada (la óptima)
+      const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
+      const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
+      L.polyline(coords, style).addTo(layer);
+      return;
+    }
+    throw new Error('sin ruta');
+  } catch (e) {
+    L.polyline([from, to], fallbackStyle).addTo(layer);
+  }
+}
+
+async function drawActiveRoute(){
   if (activeRouteLayer) mensajeroMap.removeLayer(activeRouteLayer);
-  activeRouteLayer = L.layerGroup().addTo(mensajeroMap);
-  L.polyline([mensajeroPos, activeDelivery.pickup], { color:'#89e900', weight:4, opacity:0.9 }).addTo(activeRouteLayer);
-  L.polyline([activeDelivery.pickup, activeDelivery.dropoff], { color:'rgba(137,233,0,0.5)', weight:4, dashArray:'6 6' }).addTo(activeRouteLayer);
-  L.marker(activeDelivery.dropoff, { icon: destIcon }).bindPopup('Punto de entrega').addTo(activeRouteLayer);
-  mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, activeDelivery.pickup, activeDelivery.dropoff]), { padding:[30,30] });
+  activeRouteLayer = L.featureGroup().addTo(mensajeroMap);
+
+  // ID de esta llamada, para descartar resultados desfasados si el
+  // mensajero acepta otro pedido antes de que responda OSRM.
+  const myId = ++_activeRouteCalcId;
+  const pickup  = activeDelivery.pickup;
+  const dropoff = activeDelivery.dropoff;
+  const from    = mensajeroPos;
+
+  L.marker(dropoff, { icon: destIcon }).bindPopup('Punto de entrega').addTo(activeRouteLayer);
+  mensajeroMap.fitBounds(L.latLngBounds([from, pickup, dropoff]), { padding:[30,30] });
+
+  // Tramo 1: mensajero → punto de recogida (ruta óptima por calles)
+  await drawOsrmLeg(
+    activeRouteLayer, from, pickup,
+    { color:'#89e900', weight:4, opacity:0.9 },
+    { color:'#89e900', weight:4, opacity:0.9, dashArray:'2 8' }
+  );
+  if (myId !== _activeRouteCalcId) return; // se reemplazó por otro pedido
+
+  // Tramo 2: recogida → punto de entrega (ruta óptima por calles)
+  await drawOsrmLeg(
+    activeRouteLayer, pickup, dropoff,
+    { color:'rgba(137,233,0,0.65)', weight:4, dashArray:'6 6' },
+    { color:'rgba(137,233,0,0.5)', weight:4, dashArray:'6 6' }
+  );
+  if (myId !== _activeRouteCalcId) return;
+
+  mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding:[30,30] });
 }
 
 function renderActiveDelivery(){
