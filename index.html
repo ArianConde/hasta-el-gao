@@ -576,6 +576,8 @@ function shareLocation(messengerId, lat, lng) {
     top:-80px; left:50%; transform:translateX(-50%);
     pointer-events:none;
   }
+  /* role-logo clásico (no usado, el logo real lo reemplaza) */
+  .role-logo{ display:none; }
 
   /* -------- LOGO REAL (imagen embebida) -------- */
   .role-logo-img{
@@ -1248,7 +1250,7 @@ function shareLocation(messengerId, lat, lng) {
   <div class="view active" id="view-role">
     <div class="role-screen">
       <div class="role-logo-img">
-        <img class="logo-hero-img" src="assets/presentación.png" alt="Hasta el Gao">
+        <img class="logo-hero-img" src="assets/presentación.jpg" alt="Hasta el Gao">
       </div>
       <div class="brand-wordmark" style="margin-top:2px;margin-bottom:4px;">
         <div class="bw-tagline">— RÁPIDO · SEGURO · CONFIABLE —</div>
@@ -1451,19 +1453,6 @@ function shareLocation(messengerId, lat, lng) {
     </div>
   </div>
 
-  <!-- VISTA: MAPA CLIENTE (NUEVA VISTA EXCLUSIVA PARA SEGUIMIENTO) -->
-  <div class="view" id="view-mapa-cliente">
-    <div style="position:relative; flex:1; height:100%;">
-      <div id="mapClienteSeguimiento" style="width:100%; height:100%;"></div>
-      <div class="map-hint" id="mapClienteHint" style="top:20px;">🟢 Seguimiento en tiempo real de tu pedido</div>
-      <div class="map-actions" style="top:30px;">
-        <button class="round-btn" id="btnCentrarPedido" title="Centrar en el pedido">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-        </button>
-      </div>
-    </div>
-  </div>
-
   <!-- VISTA: CHAT -->
   <div class="view" id="view-chat">
     <div class="chat-header">
@@ -1596,10 +1585,6 @@ function shareLocation(messengerId, lat, lng) {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></svg>
       Pedido
     </button>
-    <button class="nav-btn" data-view="view-mapa-cliente">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-      Mapa
-    </button>
     <button class="nav-btn" data-view="view-chat">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-1.3 4.5L21 21l-5-1.3a8.5 8.5 0 1 1 5-8.2Z"/></svg>
       Chat
@@ -1658,12 +1643,6 @@ let map = null;
 let couriersLayer = null;
 let rangeCircle = null;
 
-// Mapa de seguimiento para el cliente (nuevo)
-let mapaClienteSeguimiento = null;
-let clienteSeguimientoMarker = null;
-let clienteSeguimientoRoute = null;
-let clienteSeguimientoCourier = null;
-
 // El mapa se crea cuando la vista ya es visible (al elegir la cuenta
 // "Tengo un paquete"), evitando que Leaflet calcule un tamaño 0x0 y
 // los tiles no carguen o se vean cortados.
@@ -1706,30 +1685,6 @@ function initClienteMap(){
   setTimeout(() => map.invalidateSize(), 350);
 }
 
-// Inicializar el mapa de seguimiento del cliente
-function initMapaClienteSeguimiento(){
-  if (mapaClienteSeguimiento) return;
-
-  mapaClienteSeguimiento = L.map('mapClienteSeguimiento', {
-    zoomControl: false,
-    fadeAnimation: true,
-    zoomAnimation: true,
-    markerZoomAnimation: true,
-    preferCanvas: true
-  }).setView([23.1136, -82.3666], 14);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    detectRetina: true,
-    keepBuffer: 4,
-    updateWhenIdle: false,
-    attribution: '&copy; OpenStreetMap'
-  }).addTo(mapaClienteSeguimiento);
-
-  setTimeout(() => mapaClienteSeguimiento.invalidateSize(), 80);
-  setTimeout(() => mapaClienteSeguimiento.invalidateSize(), 350);
-}
-
 const originIcon = L.divIcon({
   html: '<div style="background:#89e900;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
   className: '', iconSize:[16,16], iconAnchor:[8,8]
@@ -1742,7 +1697,7 @@ const destIcon = L.divIcon({
 /* ===================== REPARTIDORES CERCANOS ===================== */
 const NOMBRES_REPARTIDORES = ['Carlos','Yusniel','Maykel','Ariel','Reinier','Yoel','Frank','Yandry','Lázaro','Osmany','Elier','Randy'];
 const NOMBRES_CLIENTES     = ['Ana M.','Roberto P.','Liset G.','Dayana F.','Mileidis V.','Jorge A.','Yolanda R.','Pedro J.','Lisbet C.','Mabel O.','Ernesto L.','Caridad T.'];
-const RANGO_KM = 20; // Ahora 20km para repartidores
+const RANGO_KM = 1.8; // rango de búsqueda alrededor del punto de recogida
 
 function courierIcon(vehicle){
   return L.divIcon({
@@ -2197,11 +2152,15 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
 
               // — Tiempo real: seguir al mensajero en el mapa y el chat —
               trackAssignedCourier(mensajero.id, mensajero.vehiculo || 'moto');
-              // También en el mapa de seguimiento
-              trackAssignedCourierEnSeguimiento(mensajero.id, mensajero.vehiculo || 'moto', pedido);
               subscribeToChat(pedido.id);
             }
           });
+      } else if (updatedPedido.estado === 'completado') {
+        // El repartidor exclusivo finalizó el encargo: deja de rastrearlo
+        showToast('📦 ¡Tu pedido fue entregado!');
+        if (courierLiveChannel) { _supabase.removeChannel(courierLiveChannel); courierLiveChannel = null; }
+        if (courierLiveMarker) { map.removeLayer(courierLiveMarker); courierLiveMarker = null; }
+        btn.textContent = 'PEDIDO ENTREGADO';
       }
     })
     .subscribe();
@@ -2215,6 +2174,12 @@ function trackAssignedCourier(mensajeroId, vehiculo){
     _supabase.removeChannel(courierLiveChannel);
     courierLiveChannel = null;
   }
+
+  // Desde que el cliente tiene repartidor exclusivo, se oculta el pool
+  // general de repartidores cercanos: solo se ve el asignado a su encargo.
+  couriers = [];
+  if (couriersLayer) couriersLayer.clearLayers();
+  if (rangeCircle) { map.removeLayer(rangeCircle); rangeCircle = null; }
   courierLiveChannel = _supabase
     .channel(`mensajero-live-${mensajeroId}`)
     .on('postgres_changes', {
@@ -2236,91 +2201,6 @@ function trackAssignedCourier(mensajeroId, vehiculo){
     })
     .subscribe();
 }
-
-// Seguimiento en el mapa de seguimiento del cliente
-let courierLiveSeguimientoMarker = null;
-let courierLiveSeguimientoChannel = null;
-function trackAssignedCourierEnSeguimiento(mensajeroId, vehiculo, pedido){
-  initMapaClienteSeguimiento();
-  
-  // Dibujar la ruta del pedido en el mapa de seguimiento
-  if (pedido) {
-    const originPos = { lat: pedido.origen_lat, lng: pedido.origen_lng };
-    const destPos = { lat: pedido.destino_lat, lng: pedido.destino_lng };
-    
-    if (clienteSeguimientoRoute) {
-      mapaClienteSeguimiento.removeLayer(clienteSeguimientoRoute);
-    }
-    clienteSeguimientoRoute = L.featureGroup().addTo(mapaClienteSeguimiento);
-    
-    // Marcar origen y destino
-    L.marker(originPos, { icon: originIcon }).addTo(clienteSeguimientoRoute).bindPopup('Recogida');
-    L.marker(destPos, { icon: destIcon }).addTo(clienteSeguimientoRoute).bindPopup('Entrega');
-    
-    // Dibujar ruta
-    try {
-      fetch(`https://router.project-osrm.org/route/v1/driving/${originPos.lng},${originPos.lat};${destPos.lng},${destPos.lat}?overview=full&geometries=geojson`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.routes && data.routes.length) {
-            const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
-            const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
-            L.polyline(coords, { color: '#89e900', weight: 4, opacity: 0.7, dashArray: '6 6' }).addTo(clienteSeguimientoRoute);
-            mapaClienteSeguimiento.fitBounds(clienteSeguimientoRoute.getBounds(), { padding: [40,40] });
-          }
-        })
-        .catch(() => {
-          L.polyline([originPos, destPos], { color: '#89e900', weight: 3, dashArray: '6 6', opacity: 0.6 }).addTo(clienteSeguimientoRoute);
-          mapaClienteSeguimiento.fitBounds(clienteSeguimientoRoute.getBounds(), { padding: [40,40] });
-        });
-    } catch(e) {
-      L.polyline([originPos, destPos], { color: '#89e900', weight: 3, dashArray: '6 6', opacity: 0.6 }).addTo(clienteSeguimientoRoute);
-      mapaClienteSeguimiento.fitBounds(clienteSeguimientoRoute.getBounds(), { padding: [40,40] });
-    }
-  }
-
-  if (courierLiveSeguimientoChannel) {
-    _supabase.removeChannel(courierLiveSeguimientoChannel);
-    courierLiveSeguimientoChannel = null;
-  }
-  courierLiveSeguimientoChannel = _supabase
-    .channel(`mensajero-seguimiento-${mensajeroId}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'mensajeros',
-      filter: `id=eq.${mensajeroId}`
-    }, (payload) => {
-      const m = payload.new;
-      if (m.lat == null || m.lng == null) return;
-      const pos = { lat: m.lat, lng: m.lng };
-      if (!courierLiveSeguimientoMarker) {
-        courierLiveSeguimientoMarker = L.marker(pos, { icon: courierIcon(vehiculo), zIndexOffset: 900 })
-          .addTo(mapaClienteSeguimiento)
-          .bindPopup('🛵 Tu repartidor');
-      } else {
-        courierLiveSeguimientoMarker.setLatLng(pos);
-      }
-      // Centrar en el repartidor si el mapa no tiene interacción reciente
-      if (!mapaClienteSeguimiento._userInteracted) {
-        mapaClienteSeguimiento.panTo(pos, { animate: true, duration: 0.8 });
-      }
-    })
-    .subscribe();
-
-  // Detectar interacción del usuario para no centrar automáticamente
-  mapaClienteSeguimiento.on('dragstart zoomstart', () => {
-    mapaClienteSeguimiento._userInteracted = true;
-  });
-}
-
-// Botón para centrar en el pedido en el mapa de seguimiento
-document.getElementById('btnCentrarPedido')?.addEventListener('click', () => {
-  if (clienteSeguimientoRoute) {
-    mapaClienteSeguimiento.fitBounds(clienteSeguimientoRoute.getBounds(), { padding: [40,40] });
-    mapaClienteSeguimiento._userInteracted = false;
-  }
-});
 
 // Muestra el resumen + botón WhatsApp tras solicitar el pedido
 function mostrarBotonesPostSolicitud(asignado, etaMin){
@@ -2444,25 +2324,15 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     nav.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     btn.classList.add('active');
-    const viewId = btn.dataset.view;
-    document.getElementById(viewId).classList.add('active');
+    document.getElementById(btn.dataset.view).classList.add('active');
 
-    // Si es el mapa de seguimiento, inicializarlo y redimensionar
-    if (viewId === 'view-mapa-cliente') {
-      initMapaClienteSeguimiento();
-      setTimeout(() => {
-        if (mapaClienteSeguimiento) mapaClienteSeguimiento.invalidateSize();
-      }, 100);
-    }
-
-    if (viewId === 'view-chat') {
+    if (btn.dataset.view === 'view-chat') {
       document.getElementById('chatBadge').style.display = 'none';
       document.getElementById('chatBadgeMensajero').style.display = 'none';
     }
     setTimeout(() => {
       if (map) map.invalidateSize();
       if (mensajeroMap) mensajeroMap.invalidateSize();
-      if (mapaClienteSeguimiento) mapaClienteSeguimiento.invalidateSize();
     }, 50);
   });
 });
@@ -2477,14 +2347,13 @@ const respuestasRepartidor = [
   '¡Listo! Ya tengo tu paquete.'
 ];
 
-function addMessage(text, who, chatContainer = null){
-  const container = chatContainer || chatBody;
+function addMessage(text, who){
   const div = document.createElement('div');
   div.className = 'msg ' + who;
   const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
   div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+  chatBody.appendChild(div);
+  chatBody.scrollTop = chatBody.scrollHeight;
 }
 
 function escapeHtml(str){
@@ -2779,12 +2648,10 @@ function setRole(role){
     document.getElementById('navMensajero').style.display = 'none';
     document.getElementById('view-pedido').classList.add('active');
     document.querySelector('#navCliente .nav-btn[data-view="view-pedido"]').classList.add('active');
-    document.getElementById('roleBarLabel').textContent = '📦 Cuenta: Cliente';
+    document.getElementById('roleBarLabel').textContent = '📦 Cuenta: Tengo un paquete';
     resetChat('them', 'Carlos R. · Repartidor', '● En camino', 'CR', 'Hola, ya estoy en camino para recoger tu pedido.');
     initClienteMap();
     setTimeout(() => map.invalidateSize(), 100);
-    // Inicializar el mapa de seguimiento también
-    initMapaClienteSeguimiento();
   } else {
     document.getElementById('navCliente').style.display = 'none';
     document.getElementById('navMensajero').style.display = 'flex';
@@ -2797,23 +2664,12 @@ function setRole(role){
 }
 
 // Reinicia el chat para que se ajuste a la cuenta activa
-function resetChat(who, name, role, initials, firstMsg, chatContainer = null){
-  const container = chatContainer || chatBody;
-  const avatar = chatContainer ? 
-    (chatContainer.closest('.view')?.querySelector('.chat-avatar') || document.querySelector('.chat-avatar')) :
-    document.querySelector('.chat-avatar');
-  const whoName = chatContainer ?
-    (chatContainer.closest('.view')?.querySelector('.chat-who .nm') || document.querySelector('.chat-who .nm')) :
-    document.querySelector('.chat-who .nm');
-  const whoRole = chatContainer ?
-    (chatContainer.closest('.view')?.querySelector('.chat-who .role') || document.querySelector('.chat-who .role')) :
-    document.querySelector('.chat-who .role');
-  
-  if (avatar) avatar.textContent = initials;
-  if (whoName) whoName.textContent = name;
-  if (whoRole) whoRole.innerHTML = role;
-  container.innerHTML = '';
-  if (firstMsg) addMessage(firstMsg, who, container);
+function resetChat(who, name, role, initials, firstMsg){
+  document.querySelector('.chat-avatar').textContent = initials;
+  document.querySelector('.chat-who .nm').textContent = name;
+  document.querySelector('.chat-who .role').innerHTML = role;
+  chatBody.innerHTML = '';
+  if (firstMsg) addMessage(firstMsg, who);
 }
 
 /* ===================== MODO MENSAJERO ===================== */
@@ -2824,7 +2680,6 @@ let mensajeroAccCircle = null;   // círculo de precisión GPS
 let lastOrderGenLat    = null;   // lat cuando se generaron los pedidos actuales
 let lastOrderGenLng    = null;   // lng cuando se generaron los pedidos actuales
 const REGEN_DIST_KM    = 0.4;   // regenerar pedidos si el mensajero se movió > 400 m
-const RANGO_MENSAJERO_KM = 20;  // 20km de radio para ver pedidos
 
 function initMensajeroMode(){
   if (!mensajeroMap) {
@@ -3235,17 +3090,18 @@ async function generateMensajeroOrders(center){
     const { data, error } = await _supabase
       .from('pedidos')
       .select('*, clientes(nombre)')
-      .eq('estado', 'buscando');
+      .eq('estado', 'buscando')
+      .eq('vehiculo_tipo', mensajeroVehiculo); // solo pedidos del mismo tipo de vehículo que el mensajero
       
     if (error) throw error;
     
     data.forEach(o => {
       const pickup = { lat: o.origen_lat, lng: o.origen_lng };
-      const distPickup = haversineKm(center, pickup);
+      const distPickup = map.distance(center, pickup) / 1000;
       
-      if (distPickup <= RANGO_MENSAJERO_KM) {
+      if (distPickup <= RANGO_KM) {
         const dropoff = { lat: o.destino_lat, lng: o.destino_lng };
-        const km = o.distancia_km || haversineKm(pickup, dropoff) * 1.3;
+        const km = o.distancia_km || (map.distance(pickup, dropoff) / 1000 * 1.3);
         const pack = PAQUETES.find(p => p.label === o.paquete_tamano) || PAQUETES[0];
         const costo = calcularCosto(mensajeroVehiculo, km, pack.extra, o.peso_kg);
         
@@ -3268,7 +3124,7 @@ function renderMensajeroOrders(center){
   mensajeroLayer.clearLayers();
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
   mensajeroRangeCircle = L.circle(center, {
-    radius: RANGO_MENSAJERO_KM * 1000,
+    radius: RANGO_KM * 1000,
     color: '#89e900', weight: 1, fillColor: '#89e900', fillOpacity: 0.07, dashArray: '4 6'
   }).addTo(mensajeroMap);
 
@@ -3278,78 +3134,12 @@ function renderMensajeroOrders(center){
   });
 
   mensajeroOrders.forEach(o => {
-    const marker = L.marker(o.pickup, { icon: pickupIcon })
+    L.marker(o.pickup, { icon: pickupIcon })
       .bindPopup(`Recogida de <b>${o.cliente}</b><br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
       .addTo(mensajeroLayer);
-    
-    // Mostrar ruta al hacer clic en el marcador o en la tarjeta
-    marker.on('click', () => {
-      mostrarRutaPreview(o);
-    });
   });
 
   renderOrdersList();
-}
-
-// Función para mostrar la ruta de un pedido en el mapa del mensajero
-function mostrarRutaPreview(order) {
-  if (activeRouteLayer) mensajeroMap.removeLayer(activeRouteLayer);
-  activeRouteLayer = L.featureGroup().addTo(mensajeroMap);
-  
-  const pickup = order.pickup;
-  const dropoff = order.dropoff;
-  const from = mensajeroPos || pickup;
-  
-  // Marcar origen y destino
-  L.marker(pickup, { icon: originIcon }).addTo(activeRouteLayer).bindPopup('Recogida');
-  L.marker(dropoff, { icon: destIcon }).addTo(activeRouteLayer).bindPopup('Entrega');
-  
-  // Dibujar ruta
-  try {
-    fetch(`https://router.project-osrm.org/route/v1/driving/${pickup.lng},${pickup.lat};${dropoff.lng},${dropoff.lat}?overview=full&geometries=geojson`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.routes && data.routes.length) {
-          const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
-          const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
-          L.polyline(coords, { color: '#89e900', weight: 4, opacity: 0.8 }).addTo(activeRouteLayer);
-          
-          // También ruta desde la posición actual del mensajero hasta la recogida
-          if (from) {
-            fetch(`https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${pickup.lng},${pickup.lat}?overview=full&geometries=geojson`)
-              .then(res => res.json())
-              .then(data2 => {
-                if (data2.routes && data2.routes.length) {
-                  const best2 = data2.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
-                  const coords2 = best2.geometry.coordinates.map(c => [c[1], c[0]]);
-                  L.polyline(coords2, { color: '#89e900', weight: 3, opacity: 0.5, dashArray: '4 8' }).addTo(activeRouteLayer);
-                }
-                mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [40,40] });
-              })
-              .catch(() => {
-                mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [40,40] });
-              });
-          } else {
-            mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [40,40] });
-          }
-        }
-      })
-      .catch(() => {
-        L.polyline([pickup, dropoff], { color: '#89e900', weight: 3, opacity: 0.7 }).addTo(activeRouteLayer);
-        if (from) {
-          L.polyline([from, pickup], { color: '#89e900', weight: 3, opacity: 0.4, dashArray: '4 8' }).addTo(activeRouteLayer);
-        }
-        mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [40,40] });
-      });
-  } catch(e) {
-    L.polyline([pickup, dropoff], { color: '#89e900', weight: 3, opacity: 0.7 }).addTo(activeRouteLayer);
-    if (from) {
-      L.polyline([from, pickup], { color: '#89e900', weight: 3, opacity: 0.4, dashArray: '4 8' }).addTo(activeRouteLayer);
-    }
-    mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [40,40] });
-  }
-  
-  showToast(`📍 Ruta de ${order.cliente} mostrada en el mapa`);
 }
 
 function renderOrdersList(){
@@ -3373,7 +3163,7 @@ function renderOrdersList(){
         <span>📍 Recogida a ${distTxt}</span>
       </div>
       <div class="oc-actions">
-        <button class="oc-btn ghost" data-action="ver" data-id="${o.id}">Ver ruta</button>
+        <button class="oc-btn ghost" data-action="ver" data-id="${o.id}">Ver en mapa</button>
         <button class="oc-btn primary" data-action="aceptar" data-id="${o.id}">Aceptar</button>
       </div>
     </div>`;
@@ -3384,7 +3174,7 @@ function renderOrdersList(){
       const order = mensajeroOrders.find(o => o.id === btn.dataset.id);
       if (!order) return;
       if (btn.dataset.action === 'ver') {
-        mostrarRutaPreview(order);
+        mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding:[30,30] });
       } else {
         aceptarPedido(order);
       }
@@ -3396,16 +3186,25 @@ async function aceptarPedido(order){
   const user = (await _supabase.auth.getUser()).data.user;
   if (!user) return;
 
-  const { error } = await _supabase
+  const { data: aceptado, error } = await _supabase
     .from('pedidos')
     .update({ 
       estado: 'aceptado', 
       mensajero_id: user.id 
     })
-    .eq('id', order.id);
+    .eq('id', order.id)
+    .eq('estado', 'buscando') // evita aceptar un pedido que otro repartidor ya tomó
+    .select();
 
   if (error) {
     showToast('❌ Error al aceptar: ' + error.message);
+    return;
+  }
+
+  if (!aceptado || aceptado.length === 0) {
+    showToast('⚠️ Ese pedido ya fue tomado por otro repartidor');
+    mensajeroOrders = mensajeroOrders.filter(o => o.id !== order.id);
+    renderMensajeroOrders(mensajeroPos);
     return;
   }
 
@@ -3420,11 +3219,8 @@ async function aceptarPedido(order){
   renderActiveDelivery();
   drawActiveRoute();
 
-  // Actualizar chat del mensajero
-  const chatContainer = document.getElementById('chatBodyMensajero');
-  resetChat('them', `${order.cliente} · Cliente`, '● Pedido en curso', order.cliente.slice(0,2).toUpperCase(), null, chatContainer);
-  addMessage(`He aceptado tu pedido y voy en camino a recogerlo.`, 'me', chatContainer);
-  document.getElementById('chatBadgeMensajero').style.display = 'block';
+  resetChat('them', `${order.cliente} · Cliente`, '● Pedido en curso', order.cliente.slice(0,2).toUpperCase(), null);
+  addMessage(`He aceptado tu pedido y voy en camino a recogerlo.`, 'me');
   showToast(`Pedido de ${order.cliente} aceptado`);
   
   // Suscribirse al chat en tiempo real
@@ -3499,8 +3295,7 @@ function renderActiveDelivery(){
     document.getElementById('btnLlegueRecogida').addEventListener('click', () => {
       activeDelivery.status = 'entrega';
       renderActiveDelivery();
-      const chatContainer = document.getElementById('chatBodyMensajero');
-      addMessage('Ya recogí el paquete, voy hacia el destino.', 'me', chatContainer);
+      addMessage('Ya recogí el paquete, voy hacia el destino.', 'me');
       showToast('Pedido recogido, en camino a la entrega');
     });
   } else if (o.status === 'entrega'){
@@ -3510,10 +3305,15 @@ function renderActiveDelivery(){
         <div class="ac-meta">${o.pack.icon} ${o.pack.label} · ${o.weight} kg · ${o.km.toFixed(1)} km de viaje<br>Pago estimado: <b>$${o.costo.total.toFixed(2)}</b></div>
         <button class="cta" id="btnEntregado">Marcar como entregado</button>
       </div>`;
-    document.getElementById('btnEntregado').addEventListener('click', () => {
+    document.getElementById('btnEntregado').addEventListener('click', async () => {
       showToast(`¡Entrega completada! Ganaste $${o.costo.total.toFixed(2)}`);
-      const chatContainer = document.getElementById('chatBodyMensajero');
-      addMessage('Tu pedido fue entregado. ¡Gracias!', 'me', chatContainer);
+      addMessage('Tu pedido fue entregado. ¡Gracias!', 'me');
+
+      // Avisa al cliente en tiempo real que su encargo finalizó
+      if (o.id) {
+        _supabase.from('pedidos').update({ estado: 'completado' }).eq('id', o.id)
+          .then(({ error }) => { if (error) console.error('Error al marcar completado:', error); });
+      }
 
       // Guardar en el historial de entregas
       registrarEntregaEnHistorial(o);
@@ -3527,7 +3327,6 @@ function renderActiveDelivery(){
       if (mensajeroPos && document.getElementById('availToggle').checked) generateMensajeroOrders(mensajeroPos);
 
       document.querySelector('.chat-who .role').innerHTML = '● Sin pedido activo';
-      document.getElementById('chatBadgeMensajero').style.display = 'none';
     });
   }
 }
@@ -3650,71 +3449,6 @@ document.querySelector('#navMensajero .nav-btn[data-view="view-historial-mensaje
     const badge = document.getElementById('historialBadge');
     if (badge) badge.style.display = 'none';
   });
-
-// Chat del mensajero - enviar mensajes
-document.getElementById('btnSendMensajero').addEventListener('click', sendMensajeroMessage);
-document.getElementById('chatInputMensajero').addEventListener('keypress', e => {
-  if (e.key === 'Enter') sendMensajeroMessage();
-});
-
-async function sendMensajeroMessage(){
-  const input = document.getElementById('chatInputMensajero');
-  const text = input.value.trim();
-  if (!text) return;
-  
-  const user = (await _supabase.auth.getUser()).data.user;
-  if (!user) return;
-
-  const orderId = activeDelivery ? activeDelivery.id : null;
-  
-  if (!orderId) {
-    showToast('⚠️ No hay pedido activo');
-    return;
-  }
-
-  const { error } = await _supabase
-    .from('chats')
-    .insert([{
-      pedido_id: orderId,
-      remitente_id: user.id,
-      mensaje: text
-    }]);
-
-  if (error) {
-    showToast('❌ Error al enviar mensaje');
-  } else {
-    const chatContainer = document.getElementById('chatBodyMensajero');
-    addMessage(text, 'me', chatContainer);
-    input.value = '';
-  }
-}
-
-// Suscripción al chat para el mensajero
-function subscribeToChatMensajero(orderId) {
-  _supabase
-    .channel(`chat-mensajero-${orderId}`)
-    .on('postgres_changes', { 
-      event: 'INSERT', 
-      schema: 'public', 
-      table: 'chats', 
-      filter: `pedido_id=eq.${orderId}` 
-    }, async (payload) => {
-      const user = (await _supabase.auth.getUser()).data.user;
-      if (payload.new.remitente_id !== user.id) {
-        const chatContainer = document.getElementById('chatBodyMensajero');
-        addMessage(payload.new.mensaje, 'them', chatContainer);
-        document.getElementById('chatBadgeMensajero').style.display = 'block';
-      }
-    })
-    .subscribe();
-}
-
-// Sobrescribir subscribeToChat para que también funcione con el chat del mensajero
-const originalSubscribeToChat = subscribeToChat;
-subscribeToChat = function(orderId) {
-  originalSubscribeToChat(orderId);
-  subscribeToChatMensajero(orderId);
-};
 
 </script>
 </body>
