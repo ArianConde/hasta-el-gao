@@ -24,9 +24,7 @@ let currentUser = null;
 let userRole = null;
 
 const AuthService = {
-  // REGISTRO: Crear usuario y perfil
   async registrar(role, email, password, nombre, carnet, telefono) {
-    // Verificar carnet duplicado
     const { data: existente } = await _supabase
       .from(role === 'mensajero' ? 'mensajeros' : 'clientes')
       .select('carnet')
@@ -37,7 +35,6 @@ const AuthService = {
       throw new Error('Este carnet de identidad ya está registrado');
     }
 
-    // Crear usuario en auth
     const { data: authData, error: authError } = await _supabase.auth.signUp({
       email,
       password,
@@ -54,7 +51,6 @@ const AuthService = {
     if (authError) throw authError;
     if (!authData.user) throw new Error('No se pudo crear el usuario');
 
-    // Crear perfil
     const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
     const perfilData = {
       id: authData.user.id,
@@ -80,7 +76,6 @@ const AuthService = {
       throw new Error('Error al crear perfil: ' + perfilError.message);
     }
 
-    // Iniciar sesión automáticamente
     const { data: loginData, error: loginError } = await _supabase.auth.signInWithPassword({
       email,
       password
@@ -104,7 +99,6 @@ const AuthService = {
     };
   },
 
-  // LOGIN: Verificar perfil
   async login(email, password, role) {
     const { data, error } = await _supabase.auth.signInWithPassword({
       email,
@@ -133,12 +127,10 @@ const AuthService = {
     };
   },
 
-  // OBTENER USUARIO ACTUAL
   async obtenerUsuarioActual() {
     const { data: { user } } = await _supabase.auth.getUser();
     if (!user) return null;
 
-    // Buscar en clientes
     const { data: cliente } = await _supabase
       .from('clientes')
       .select('*')
@@ -149,7 +141,6 @@ const AuthService = {
       return { user, perfil: cliente, role: 'cliente' };
     }
 
-    // Buscar en mensajeros
     const { data: mensajero } = await _supabase
       .from('mensajeros')
       .select('*')
@@ -1328,7 +1319,7 @@ const AuthService = {
   <div class="view active" id="view-role">
     <div class="role-screen">
       <div class="role-logo-img">
-        <img class="logo-hero-img" src="assets/presentación.png" alt="Hasta el Gao">
+        <img class="logo-hero-img" src="assets/presentación.jpg" alt="Hasta el Gao">
       </div>
       <div class="brand-wordmark" style="margin-top:2px;margin-bottom:4px;">
         <div class="bw-tagline">— RÁPIDO · SEGURO · CONFIABLE —</div>
@@ -1694,6 +1685,7 @@ const AuthService = {
 <script>
 // ===================== CONFIGURACIÓN =====================
 const TARIFA = { minimo: 1.50 };
+const RANGO_KM = 1.8;
 
 const VEHICLES = {
   bicicleta: { label:'Bicicleta', icon:'🚲', base:0.50, porKm:0.15, speedKmh:14 },
@@ -1734,7 +1726,6 @@ let mensajeroAccCircle = null;
 let lastOrderGenLat = null;
 let lastOrderGenLng = null;
 const REGEN_DIST_KM = 0.4;
-const RANGO_KM = 1.8;
 
 // ===================== FUNCIONES UTILES =====================
 
@@ -2101,6 +2092,8 @@ function courierIcon(vehicle) {
   });
 }
 
+// ===================== FUNCIONES DEL MAPA CLIENTE =====================
+
 async function generateCouriers(center) {
   couriers = [];
   try {
@@ -2112,15 +2105,17 @@ async function generateCouriers(center) {
     if (error) throw error;
     
     data.forEach(m => {
-      const d = map.distance(center, [m.lat, m.lng]) / 1000;
-      if (d <= RANGO_KM) {
-        couriers.push({
-          id: m.id,
-          name: m.nombre,
-          vehicle: m.vehiculo || 'moto',
-          pos: { lat: m.lat, lng: m.lng },
-          dist: d
-        });
+      if (m.lat && m.lng) {
+        const d = haversineKm(center, { lat: m.lat, lng: m.lng });
+        if (d <= RANGO_KM) {
+          couriers.push({
+            id: m.id,
+            name: m.nombre,
+            vehicle: m.vehiculo || 'moto',
+            pos: { lat: m.lat, lng: m.lng },
+            dist: d
+          });
+        }
       }
     });
   } catch (err) {
@@ -2542,7 +2537,7 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
             if (mensajero) {
               const veh = VEHICLES[mensajero.vehiculo || 'moto'];
               const dist = (mensajero.lat && mensajero.lng)
-                ? map.distance(origin, [mensajero.lat, mensajero.lng]) / 1000
+                ? haversineKm(origin, { lat: mensajero.lat, lng: mensajero.lng })
                 : routeKm;
               const etaMin = Math.max(1, Math.round((dist / veh.speedKmh) * 60));
               
@@ -2916,6 +2911,7 @@ function onMensajeroPosUpdate(pos, accuracyM) {
 
   updateGpsStatusBar('ok', accuracyM);
 
+  // Generar pedidos si está disponible y no tiene pedido activo
   if (!activeDelivery && document.getElementById('availToggle').checked) {
     const moved = (lastOrderGenLat !== null)
       ? haversineKm({ lat: lastOrderGenLat, lng: lastOrderGenLng }, pos)
@@ -3063,6 +3059,8 @@ document.addEventListener('visibilitychange', async () => {
   }
 });
 
+// ===================== FUNCIONES DEL MENSAJERO =====================
+
 // Selector de vehículo del mensajero
 document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card => {
   card.addEventListener('click', () => {
@@ -3100,9 +3098,16 @@ const PAQUETES = [
   { label: 'Grande', icon: '🧳', extra: 3.00 }
 ];
 
+// FUNCIÓN CORREGIDA: Generar pedidos cercanos usando haversineKm
 async function generateMensajeroOrders(center) {
   mensajeroOrders = [];
+  
+  // Limpiar el layer antes de añadir nuevos marcadores
+  mensajeroLayer.clearLayers();
+  
   try {
+    console.log('Buscando pedidos cerca de:', center);
+    
     const { data, error } = await _supabase
       .from('pedidos')
       .select('*, clientes(nombre)')
@@ -3111,13 +3116,22 @@ async function generateMensajeroOrders(center) {
       
     if (error) throw error;
     
+    console.log('Pedidos encontrados:', data?.length || 0);
+    
+    if (!data || data.length === 0) {
+      renderMensajeroOrders(center);
+      return;
+    }
+    
     data.forEach(o => {
       const pickup = { lat: o.origen_lat, lng: o.origen_lng };
-      const distPickup = map.distance(center, pickup) / 1000;
+      const distPickup = haversineKm(center, pickup);
+      
+      console.log(`Pedido ${o.id}: distancia ${distPickup.toFixed(2)} km, límite ${RANGO_KM} km`);
       
       if (distPickup <= RANGO_KM) {
         const dropoff = { lat: o.destino_lat, lng: o.destino_lng };
-        const km = o.distancia_km || (map.distance(pickup, dropoff) / 1000 * 1.3);
+        const km = o.distancia_km || haversineKm(pickup, dropoff) * 1.3;
         const pack = PAQUETES.find(p => p.label === o.paquete_tamano) || PAQUETES[0];
         const costo = calcularCosto(mensajeroVehiculo, km, pack.extra, o.peso_kg);
         
@@ -3130,15 +3144,23 @@ async function generateMensajeroOrders(center) {
         });
       }
     });
+    
+    console.log('Pedidos filtrados:', mensajeroOrders.length);
+    
   } catch (err) {
     console.error('Error cargando pedidos disponibles:', err);
+    showToast('❌ Error al cargar pedidos: ' + err.message);
   }
+  
   renderMensajeroOrders(center);
 }
 
 function renderMensajeroOrders(center) {
+  // Limpiar capas anteriores
   mensajeroLayer.clearLayers();
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
+  
+  // Dibujar círculo de rango
   mensajeroRangeCircle = L.circle(center, {
     radius: RANGO_KM * 1000,
     color: '#89e900', weight: 1, fillColor: '#89e900', fillOpacity: 0.07, dashArray: '4 6'
@@ -3149,11 +3171,17 @@ function renderMensajeroOrders(center) {
     className: '', iconSize: [26, 26], iconAnchor: [13, 13]
   });
 
-  mensajeroOrders.forEach(o => {
-    L.marker(o.pickup, { icon: pickupIcon })
-      .bindPopup(`Recogida de <b>${o.cliente}</b><br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
-      .addTo(mensajeroLayer);
-  });
+  if (mensajeroOrders.length === 0) {
+    // Mostrar mensaje de que no hay pedidos
+    document.getElementById('ordersList').innerHTML = 
+      '<div class="empty-result">No hay pedidos disponibles cerca de tu ubicación.</div>';
+  } else {
+    mensajeroOrders.forEach(o => {
+      L.marker(o.pickup, { icon: pickupIcon })
+        .bindPopup(`Recogida de <b>${o.cliente}</b><br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
+        .addTo(mensajeroLayer);
+    });
+  }
 
   renderOrdersList();
 }
