@@ -18,32 +18,26 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const _supabase = supabaseClient;
 
-// ===================== AUTENTICACIÓN MEJORADA =====================
+// ===================== AUTENTICACIÓN =====================
 
-// Estado de autenticación
-let currentUser = null;     // { user, perfil, role }
-let authRole = null;        // 'cliente' | 'mensajero' | null
+let currentUser = null;
+let userRole = null;
 
-// Funciones de autenticación
 const AuthService = {
-  // Verificar si el usuario tiene un perfil válido en la tabla de su rol
-  async verificarPerfil(role, userId) {
-    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
-    const { data, error } = await _supabase
-      .from(table)
-      .select('*')
-      .eq('id', userId)
-      .single();
-    
-    if (error || !data) {
-      return { existe: false, error: error?.message || 'Perfil no encontrado' };
-    }
-    return { existe: true, perfil: data };
-  },
-
-  // Registrar nuevo usuario con todos sus datos
+  // REGISTRO: Crear usuario y perfil
   async registrar(role, email, password, nombre, carnet, telefono) {
-    // 1. Crear usuario en auth
+    // Verificar carnet duplicado
+    const { data: existente } = await _supabase
+      .from(role === 'mensajero' ? 'mensajeros' : 'clientes')
+      .select('carnet')
+      .eq('carnet', carnet)
+      .single();
+
+    if (existente) {
+      throw new Error('Este carnet de identidad ya está registrado');
+    }
+
+    // Crear usuario en auth
     const { data: authData, error: authError } = await _supabase.auth.signUp({
       email,
       password,
@@ -60,7 +54,7 @@ const AuthService = {
     if (authError) throw authError;
     if (!authData.user) throw new Error('No se pudo crear el usuario');
 
-    // 2. Crear perfil en la tabla correspondiente
+    // Crear perfil
     const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
     const perfilData = {
       id: authData.user.id,
@@ -70,7 +64,6 @@ const AuthService = {
       email: email
     };
 
-    // Si es mensajero, agregar campos específicos
     if (role === 'mensajero') {
       perfilData.disponible = false;
       perfilData.vehiculo = 'moto';
@@ -83,19 +76,36 @@ const AuthService = {
       .insert([perfilData]);
 
     if (perfilError) {
+      console.error('Error al crear perfil:', perfilError);
       throw new Error('Error al crear perfil: ' + perfilError.message);
     }
 
-    return { 
-      user: authData.user, 
+    // Iniciar sesión automáticamente
+    const { data: loginData, error: loginError } = await _supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (loginError) {
+      return { 
+        user: authData.user, 
+        perfil: perfilData,
+        requiereConfirmacion: !authData.session,
+        loginAutomatico: false
+      };
+    }
+
+    return {
+      user: loginData.user,
       perfil: perfilData,
-      requiereConfirmacion: !authData.session
+      role: role,
+      requiereConfirmacion: false,
+      loginAutomatico: true
     };
   },
 
-  // Iniciar sesión y verificar rol
+  // LOGIN: Verificar perfil
   async login(email, password, role) {
-    // 1. Autenticar en Supabase
     const { data, error } = await _supabase.auth.signInWithPassword({
       email,
       password
@@ -104,61 +114,53 @@ const AuthService = {
     if (error) throw error;
     if (!data.user) throw new Error('Usuario no encontrado');
 
-    // 2. Verificar que el perfil existe en la tabla del rol elegido
-    const verif = await this.verificarPerfil(role, data.user.id);
-    
-    if (!verif.existe) {
+    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
+    const { data: perfil, error: perfilError } = await _supabase
+      .from(table)
+      .select('*')
+      .eq('id', data.user.id)
+      .single();
+
+    if (perfilError || !perfil) {
       await _supabase.auth.signOut();
-      throw new Error(`No tienes una cuenta de ${role === 'mensajero' ? 'mensajero' : 'cliente'}. Verifica que elegiste el rol correcto.`);
+      throw new Error(`No tienes una cuenta de ${role === 'mensajero' ? 'mensajero' : 'cliente'}. Verifica el rol.`);
     }
 
     return {
       user: data.user,
-      perfil: verif.perfil,
+      perfil: perfil,
       role: role
     };
   },
 
-  // Obtener usuario actual con su perfil
+  // OBTENER USUARIO ACTUAL
   async obtenerUsuarioActual() {
     const { data: { user } } = await _supabase.auth.getUser();
     if (!user) return null;
 
-    // Intentar obtener perfil de cliente
-    let { data: perfil, error: errCliente } = await _supabase
+    // Buscar en clientes
+    const { data: cliente } = await _supabase
       .from('clientes')
       .select('*')
       .eq('id', user.id)
       .single();
 
-    if (perfil) {
-      return { user, perfil, role: 'cliente' };
+    if (cliente) {
+      return { user, perfil: cliente, role: 'cliente' };
     }
 
-    // Intentar obtener perfil de mensajero
-    let { data: perfilMensajero, error: errMensajero } = await _supabase
+    // Buscar en mensajeros
+    const { data: mensajero } = await _supabase
       .from('mensajeros')
       .select('*')
       .eq('id', user.id)
       .single();
 
-    if (perfilMensajero) {
-      return { user, perfil: perfilMensajero, role: 'mensajero' };
+    if (mensajero) {
+      return { user, perfil: mensajero, role: 'mensajero' };
     }
 
     return null;
-  },
-
-  // Actualizar perfil
-  async actualizarPerfil(role, data) {
-    const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
-    const { error } = await _supabase
-      .from(table)
-      .update(data)
-      .eq('id', currentUser.user.id);
-    
-    if (error) throw error;
-    return true;
   }
 };
 </script>
@@ -167,7 +169,6 @@ const AuthService = {
 <style>
   /* ============================================================
      LIQUID GLASS — Dark + Kiwi Green
-     Variables, tokens, componentes completos
   ============================================================ */
   :root{
     --night:      #1e1e1e;
@@ -183,7 +184,6 @@ const AuthService = {
     --muted2:     rgba(255,255,255,0.14);
     --ok:         #89e900;
 
-    /* --- Liquid Glass tokens --- */
     --glass-1:     rgba(255,255,255,0.08);
     --glass-2:     rgba(255,255,255,0.11);
     --glass-3:     rgba(255,255,255,0.16);
@@ -194,7 +194,6 @@ const AuthService = {
     --blur-md:     blur(28px) saturate(180%);
     --blur-lg:     blur(40px) saturate(200%);
 
-    /* Sombras */
     --shadow-xs:   0 2px 8px rgba(0,0,0,0.25);
     --shadow-sm:   0 4px 16px rgba(0,0,0,0.32);
     --shadow-md:   0 8px 32px rgba(0,0,0,0.38);
@@ -204,19 +203,10 @@ const AuthService = {
     --shine-top:   inset 0 1px 0 rgba(255,255,255,0.18);
     --shine-kiwi:  inset 0 1px 0 rgba(255,255,255,0.55);
 
-    /* Radios */
     --radius:    22px;
     --radius-sm: 16px;
     --radius-lg: 28px;
     --radius-xl: 36px;
-
-    /* Compatibilidad */
-    --indigo:       #1e1e1e;
-    --indigo-soft:  #252525;
-    --cream:        #ffffff;
-    --cream-dim:    rgba(255,255,255,0.08);
-    --gold:         #89e900;
-    --gold-dark:    #5fa300;
   }
 
   *{ box-sizing:border-box; margin:0; padding:0; }
@@ -266,7 +256,6 @@ const AuthService = {
       0 0 20px rgba(137,233,0,0.2),
       var(--shadow-sm);
   }
-  .brand-mark svg{ width:26px; height:26px; }
   .brand-mark-img{
     width: 100%;
     height: 100%;
@@ -371,7 +360,6 @@ const AuthService = {
     position:relative;
     overflow:hidden;
   }
-  /* Brillo top de cristal */
   .field-group::before{
     content:'';
     position:absolute; top:0; left:5%; right:5%; height:1px;
@@ -687,7 +675,6 @@ const AuthService = {
     background: var(--night); color:var(--white);
     text-align:center; position:relative; overflow-y:auto; overflow-x:hidden;
   }
-  /* Fondo ambiental */
   .role-screen::before{
     content:''; position:absolute;
     width:320px; height:320px;
@@ -696,10 +683,7 @@ const AuthService = {
     top:-80px; left:50%; transform:translateX(-50%);
     pointer-events:none;
   }
-  /* role-logo clásico (no usado, el logo real lo reemplaza) */
-  .role-logo{ display:none; }
 
-  /* -------- LOGO REAL (imagen embebida) -------- */
   .role-logo-img{
     width: min(280px, 88vw);
     margin: 0 auto 6px;
@@ -716,7 +700,6 @@ const AuthService = {
     display: block;
   }
 
-  /* Wordmark HASTA EL / GAO */
   .brand-wordmark{
     margin-bottom:8px;
     line-height:1;
@@ -728,17 +711,6 @@ const AuthService = {
     color:var(--muted);
     letter-spacing:0.2em;
     text-transform:uppercase;
-  }
-  .role-subtitle{
-    font-size:0.85rem;
-    color:var(--muted);
-    margin-bottom:18px;
-    font-weight:500;
-  }
-  .role-screen h1{
-    font-family:'Sora', sans-serif; font-weight:800;
-    font-size:1.7rem; margin-bottom:6px;
-    color:var(--white); letter-spacing:-0.01em;
   }
   .role-screen p{ font-size:0.82rem; color:var(--muted); margin-bottom:36px; }
 
@@ -1065,11 +1037,53 @@ const AuthService = {
   .leaflet-popup-tip{ background:rgba(20,20,20,0.95); }
   .leaflet-popup-content{ font-family:'Inter'; font-size:0.78rem; font-weight:600; margin:8px 10px; }
 
+  /* -------- AUTH MODAL -------- */
+  .authm-overlay{
+    position:fixed; inset:0; z-index:9999;
+    background:rgba(10,10,10,0.72); backdrop-filter:blur(6px);
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  .authm-overlay.show{ display:flex; }
+  .authm-box{
+    width:100%; max-width:360px; background:var(--night2);
+    border:1px solid var(--glass-line); border-radius:20px;
+    padding:22px 20px; box-shadow:var(--shadow-lg,0 10px 40px rgba(0,0,0,.4));
+    position:relative;
+  }
+  .authm-title{ font-family:'Sora'; font-weight:800; font-size:1.05rem; color:var(--white); margin-bottom:4px; }
+  .authm-sub{ font-size:0.76rem; color:var(--muted); margin-bottom:16px; }
+  .authm-field{
+    background:var(--glass-dark); border:1px solid var(--glass-line);
+    border-radius:12px; padding:10px 12px; margin-bottom:10px;
+  }
+  .authm-field label{ display:block; font-size:0.66rem; font-weight:700; color:var(--muted); margin-bottom:3px; text-transform:uppercase; letter-spacing:.03em; }
+  .authm-field input{
+    width:100%; border:none; background:transparent; outline:none;
+    color:var(--white); font-size:0.88rem; font-weight:600; font-family:'Inter',sans-serif;
+  }
+  .authm-field input::placeholder{ color:var(--muted); font-weight:500; }
+  .authm-btn{
+    width:100%; border:none; border-radius:12px; padding:12px;
+    background:var(--kiwi); color:#111; font-family:'Sora'; font-weight:800;
+    font-size:0.84rem; cursor:pointer; margin-top:6px;
+    transition: opacity .15s ease;
+  }
+  .authm-btn:disabled{ opacity:0.6; cursor:not-allowed; }
+  .authm-switch{
+    text-align:center; margin-top:14px; font-size:0.76rem; color:var(--muted);
+  }
+  .authm-switch a{ color:var(--kiwi); font-weight:700; cursor:pointer; text-decoration:none; }
+  .authm-close{
+    position:absolute; top:14px; right:16px; background:none; border:none;
+    color:var(--muted); font-size:1.1rem; cursor:pointer;
+  }
+  .authm-err{ font-size:0.74rem; color:#ff8f8f; margin:-4px 0 10px; display:none; }
+  .authm-err.show{ display:block; }
+
 /* ============================================================
-   RESPONSIVE — Mobile · Tablet · Desktop · Large
+   RESPONSIVE
    ============================================================ */
 
-/* ---- TABLET 640px+ ---- */
 @media (min-width:640px){
   #app{ max-width:100%; }
   header{ padding:18px 28px 16px; }
@@ -1078,15 +1092,11 @@ const AuthService = {
   .role-screen{ max-width:560px; margin:0 auto; width:100%; }
   .role-logo-img{ width:min(360px,80vw); }
   .size-options{ gap:12px; }
-  .result-card .rc-title{ font-size:0.9rem; }
-  .order-card{ margin-bottom:14px; }
 }
 
-/* ---- DESKTOP 1024px+ ---- */
 @media (min-width:1024px){
   html,body{ overflow:hidden; height:100%; }
 
-  /* Grid base — solo aplica cuando ya hay una cuenta activa */
   #app:not(.pre-role){
     max-width:100%;
     display:grid;
@@ -1100,7 +1110,6 @@ const AuthService = {
     overflow:hidden;
   }
 
-  /* Role screen: centrado a pantalla completa */
   #app.pre-role{
     max-width:100%;
     align-items:center;
@@ -1117,14 +1126,12 @@ const AuthService = {
   }
   #app.pre-role .role-logo-img{ width:min(320px,70vw); }
 
-  /* Grid areas */
   header{ grid-area:header; }
   .role-bar{ grid-area:rolebar; }
   #navCliente,#navMensajero{ grid-area:sidenav; height:100%; overflow:hidden; }
   .view{ grid-area:content; height:100%; overflow:hidden; }
   #view-role{ grid-area:content; }
 
-  /* ---- Side nav (reemplaza bottom nav) ---- */
   nav.bottom-nav{
     position:static;
     flex-direction:column;
@@ -1157,14 +1164,12 @@ const AuthService = {
   }
   .nav-badge{ right:12px; top:8px; }
 
-  /* ---- Vista mapa+panel lado a lado ---- */
   #view-pedido.active, #view-mensajero.active{
     flex-direction:row;
     overflow:hidden;
     height:100%;
   }
 
-  /* Contenedor del mapa ocupa todo el espacio restante */
   #view-pedido > div:first-child,
   #view-mensajero > div:first-child{
     flex:1 1 0 !important;
@@ -1179,7 +1184,6 @@ const AuthService = {
     width:100%;
   }
 
-  /* Panel desplazado a la derecha */
   #view-pedido .panel,
   #view-mensajero .panel{
     width:400px;
@@ -1193,7 +1197,6 @@ const AuthService = {
     box-shadow:-1px 0 0 rgba(255,255,255,0.04);
   }
 
-  /* Chat: ocupa todo el contenido */
   #view-chat.active, #view-chatmensajero.active{
     display:flex; flex-direction:column; height:100%;
   }
@@ -1201,14 +1204,10 @@ const AuthService = {
     flex:1; overflow-y:auto;
   }
 
-  /* Toast: offset al sidebar */
   .toast{ left:calc(50% + 115px); }
-
-  /* Status pill en header más visible */
   .status-pill{ font-size:0.78rem; padding:8px 16px; }
 }
 
-/* ---- LARGE DESKTOP 1440px+ ---- */
 @media (min-width:1440px){
   #app:not(.pre-role){
     grid-template-columns:260px 1fr;
@@ -1220,7 +1219,7 @@ const AuthService = {
 }
 
 /* ============================================================
-   HISTORIAL DE ENTREGAS (MENSAJERO)
+   HISTORIAL DE ENTREGAS
    ============================================================ */
 .hist-stats{
   display:flex; align-items:center;
@@ -1320,48 +1319,6 @@ const AuthService = {
   color:var(--white); margin-bottom:6px;
 }
 .hist-empty-sub{ font-size:0.78rem; color:var(--muted); line-height:1.5; }
-  /* -------- AUTH MODAL (login / registro) -------- */
-  .authm-overlay{
-    position:fixed; inset:0; z-index:9999;
-    background:rgba(10,10,10,0.72); backdrop-filter:blur(6px);
-    display:none; align-items:center; justify-content:center; padding:20px;
-  }
-  .authm-overlay.show{ display:flex; }
-  .authm-box{
-    width:100%; max-width:360px; background:var(--night2);
-    border:1px solid var(--glass-line); border-radius:20px;
-    padding:22px 20px; box-shadow:var(--shadow-lg,0 10px 40px rgba(0,0,0,.4));
-    position:relative;
-  }
-  .authm-title{ font-family:'Sora'; font-weight:800; font-size:1.05rem; color:var(--white); margin-bottom:4px; }
-  .authm-sub{ font-size:0.76rem; color:var(--muted); margin-bottom:16px; }
-  .authm-field{
-    background:var(--glass-dark); border:1px solid var(--glass-line);
-    border-radius:12px; padding:10px 12px; margin-bottom:10px;
-  }
-  .authm-field label{ display:block; font-size:0.66rem; font-weight:700; color:var(--muted); margin-bottom:3px; text-transform:uppercase; letter-spacing:.03em; }
-  .authm-field input{
-    width:100%; border:none; background:transparent; outline:none;
-    color:var(--white); font-size:0.88rem; font-weight:600; font-family:'Inter',sans-serif;
-  }
-  .authm-field input::placeholder{ color:var(--muted); font-weight:500; }
-  .authm-btn{
-    width:100%; border:none; border-radius:12px; padding:12px;
-    background:var(--kiwi); color:#111; font-family:'Sora'; font-weight:800;
-    font-size:0.84rem; cursor:pointer; margin-top:6px;
-    transition: opacity .15s ease;
-  }
-  .authm-btn:disabled{ opacity:0.6; cursor:not-allowed; }
-  .authm-switch{
-    text-align:center; margin-top:14px; font-size:0.76rem; color:var(--muted);
-  }
-  .authm-switch a{ color:var(--kiwi); font-weight:700; cursor:pointer; text-decoration:none; }
-  .authm-close{
-    position:absolute; top:14px; right:16px; background:none; border:none;
-    color:var(--muted); font-size:1.1rem; cursor:pointer;
-  }
-  .authm-err{ font-size:0.74rem; color:#ff8f8f; margin:-4px 0 10px; display:none; }
-  .authm-err.show{ display:block; }
 </style>
 </head>
 <body>
@@ -1371,7 +1328,7 @@ const AuthService = {
   <div class="view active" id="view-role">
     <div class="role-screen">
       <div class="role-logo-img">
-        <img class="logo-hero-img" src="assets/presentación.jpg" alt="Hasta el Gao">
+        <img class="logo-hero-img" src="assets/presentación.png" alt="Hasta el Gao">
       </div>
       <div class="brand-wordmark" style="margin-top:2px;margin-bottom:4px;">
         <div class="bw-tagline">— RÁPIDO · SEGURO · CONFIABLE —</div>
@@ -1396,7 +1353,7 @@ const AuthService = {
     </div>
   </div>
 
-  <!-- MODAL: LOGIN / REGISTRO MEJORADO -->
+  <!-- MODAL: LOGIN / REGISTRO -->
   <div class="authm-overlay" id="authModal">
     <div class="authm-box">
       <button class="authm-close" id="authClose">✕</button>
@@ -1574,7 +1531,7 @@ const AuthService = {
     </div>
   </div>
 
-  <!-- VISTA: CHAT -->
+  <!-- VISTA: CHAT CLIENTE -->
   <div class="view" id="view-chat">
     <div class="chat-header">
       <div class="chat-avatar">CR</div>
@@ -1735,10 +1692,8 @@ const AuthService = {
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-/* ===================== CONFIG DE TARIFAS ===================== */
-const TARIFA = {
-  minimo: 1.50
-};
+// ===================== CONFIGURACIÓN =====================
+const TARIFA = { minimo: 1.50 };
 
 const VEHICLES = {
   bicicleta: { label:'Bicicleta', icon:'🚲', base:0.50, porKm:0.15, speedKmh:14 },
@@ -1746,7 +1701,7 @@ const VEHICLES = {
   triciclo:  { label:'Triciclo',  icon:'🛺', base:1.00, porKm:0.30, speedKmh:18 }
 };
 
-/* ===================== ESTADO ===================== */
+// ===================== ESTADO GLOBAL =====================
 let origin = null;
 let dest = null;
 let originMarker, destMarker, routeLine;
@@ -1756,7 +1711,12 @@ let sizeExtra = 0;
 let weightKg = 2;
 let selectedVehicle = 'bicicleta';
 let couriers = [];
-let userRole = null;
+let map = null;
+let couriersLayer = null;
+let rangeCircle = null;
+let _routeCalcId = 0;
+
+// Estado mensajero
 let mensajeroMap = null;
 let mensajeroLayer = null;
 let mensajeroRangeCircle = null;
@@ -1768,19 +1728,75 @@ let mensajeroOrders = [];
 let activeDelivery = null;
 let deliveryHistory = [];
 let histFilterPeriod = 'all';
-let map = null;
-let couriersLayer = null;
-let rangeCircle = null;
 let mensajeroWatchId = null;
 let mensajeroMarker = null;
 let mensajeroAccCircle = null;
 let lastOrderGenLat = null;
 let lastOrderGenLng = null;
 const REGEN_DIST_KM = 0.4;
+const RANGO_KM = 1.8;
 
-/* ===================== AUTENTICACIÓN ===================== */
+// ===================== FUNCIONES UTILES =====================
 
-// Referencias al modal
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function haversineKm(a, b) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLng = (b.lng - a.lng) * Math.PI/180;
+  const la1 = a.lat * Math.PI/180;
+  const la2 = b.lat * Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function calcularCosto(vehicleKey, km, sizeExtraVal, weightVal) {
+  const veh = VEHICLES[vehicleKey];
+  const distancia = Math.max(veh.base + km * veh.porKm, TARIFA.minimo);
+  const peso = weightVal > 3 ? (weightVal - 3) * 0.50 : 0;
+  return { distancia, sizeExtra: sizeExtraVal, peso, total: distancia + sizeExtraVal + peso };
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function addMessage(text, who) {
+  const chatBodyEl = document.getElementById('chatBody');
+  if (!chatBodyEl) return;
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
+  chatBodyEl.appendChild(div);
+  chatBodyEl.scrollTop = chatBodyEl.scrollHeight;
+}
+
+function resetChat(who, name, role, initials, firstMsg) {
+  const chatAvatar = document.querySelector('.chat-avatar');
+  const chatWhoNm = document.querySelector('.chat-who .nm');
+  const chatWhoRole = document.querySelector('.chat-who .role');
+  const chatBodyEl = document.getElementById('chatBody');
+  
+  if (chatAvatar) chatAvatar.textContent = initials;
+  if (chatWhoNm) chatWhoNm.textContent = name;
+  if (chatWhoRole) chatWhoRole.innerHTML = role;
+  if (chatBodyEl) {
+    chatBodyEl.innerHTML = '';
+    if (firstMsg) addMessage(firstMsg, who);
+  }
+}
+
+// ===================== AUTENTICACIÓN - UI =====================
+
 const authModalEl = document.getElementById('authModal');
 const authTitleEl = document.getElementById('authTitle');
 const authSubEl = document.getElementById('authSub');
@@ -1833,27 +1849,26 @@ function renderAuthMode() {
   }
 }
 
-function showError(msg) {
+function showAuthError(msg) {
   authErrEl.textContent = msg;
   authErrEl.classList.add('show');
 }
 
-function hideError() {
+function hideAuthError() {
   authErrEl.classList.remove('show');
   authErrEl.textContent = '';
 }
 
-// Evento de cierre del modal
 document.getElementById('authClose').addEventListener('click', closeAuthModal);
 
-// Alternar entre login y registro
 authSwitchLnk.addEventListener('click', () => {
   authMode = authMode === 'login' ? 'register' : 'login';
-  hideError();
+  hideAuthError();
   renderAuthMode();
 });
 
-// Evento de envío del formulario de autenticación
+// ===================== EVENTO DE ENVÍO DEL FORMULARIO =====================
+
 authSubmitBtn.addEventListener('click', async () => {
   const email = document.getElementById('authEmail').value.trim();
   const pass = document.getElementById('authPass').value.trim();
@@ -1862,29 +1877,29 @@ authSubmitBtn.addEventListener('click', async () => {
   const telefono = document.getElementById('authTelefono').value.trim();
 
   if (!email || !pass) {
-    showError('Ingresa correo y contraseña');
+    showAuthError('Ingresa correo y contraseña');
     return;
   }
   
   if (pass.length < 6) {
-    showError('La contraseña debe tener al menos 6 caracteres');
+    showAuthError('La contraseña debe tener al menos 6 caracteres');
     return;
   }
 
   if (authMode === 'register') {
     if (!nombre) {
-      showError('Ingresa tu nombre completo');
+      showAuthError('Ingresa tu nombre completo');
       return;
     }
     if (!carnet || !/^\d{11}$/.test(carnet)) {
-      showError('El carnet de identidad debe tener 11 dígitos');
+      showAuthError('El carnet de identidad debe tener 11 dígitos');
       return;
     }
   }
 
   authSubmitBtn.disabled = true;
   authSubmitBtn.textContent = authMode === 'login' ? 'Entrando...' : 'Creando cuenta...';
-  hideError();
+  hideAuthError();
 
   try {
     if (authMode === 'login') {
@@ -1909,55 +1924,55 @@ authSubmitBtn.addEventListener('click', async () => {
         return;
       }
 
-      currentUser = { user: result.user, perfil: result.perfil, role: pendingRole };
-      closeAuthModal();
-      showToast('✅ Cuenta creada exitosamente');
-      setRole(pendingRole);
+      if (result.loginAutomatico) {
+        currentUser = { user: result.user, perfil: result.perfil, role: pendingRole };
+        closeAuthModal();
+        showToast('✅ Cuenta creada exitosamente');
+        setRole(pendingRole);
+      } else {
+        closeAuthModal();
+        showToast('📩 Cuenta creada. Por favor inicia sesión.');
+        pendingRole = result.role || pendingRole;
+        openAuthModal(pendingRole);
+      }
     }
   } catch (err) {
-    showError(err.message || 'Error de autenticación');
+    console.error('Error de autenticación:', err);
+    showAuthError(err.message || 'Error de autenticación');
   } finally {
     authSubmitBtn.disabled = false;
     renderAuthMode();
   }
 });
 
-// Cerrar sesión
-document.getElementById('btnLogout').addEventListener('click', async () => {
-  if (userRole === 'mensajero') stopWatchingMensajero();
-  
-  try {
-    await _supabase.auth.signOut();
-  } catch(e) { /* ignorar */ }
-  
-  currentUser = null;
-  userRole = null;
-  authRole = null;
-  
-  document.getElementById('view-role').classList.remove('authenticated');
-  document.getElementById('app').classList.add('pre-role');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-role').classList.add('active');
-  
-  document.getElementById('authPass').value = '';
-  document.getElementById('authEmail').value = '';
-  
-  showToast('👋 Sesión cerrada');
+// ===================== SELECCIÓN DE ROL =====================
+
+document.querySelectorAll('.role-card').forEach(card => {
+  card.addEventListener('click', async () => {
+    const { data: { user } } = await _supabase.auth.getUser();
+    if (user) {
+      const role = card.dataset.role;
+      const table = role === 'mensajero' ? 'mensajeros' : 'clientes';
+      const { data: perfil } = await _supabase
+        .from(table)
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      
+      if (perfil) {
+        currentUser = { user, perfil, role };
+        document.getElementById('view-role').classList.add('authenticated');
+        setRole(role);
+        return;
+      }
+    }
+    openAuthModal(card.dataset.role);
+  });
 });
 
-/* ===================== NAVEGACIÓN ===================== */
+// ===================== FUNCIONES DE ROL =====================
 
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2400);
-}
-
-/* ===================== SELECCIÓN DE ROL ===================== */
-
-async function setRole(role) {
+function setRole(role) {
   userRole = role;
   document.getElementById('app').classList.remove('pre-role');
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -1984,35 +1999,30 @@ async function setRole(role) {
   }
 }
 
-function resetChat(who, name, role, initials, firstMsg) {
-  document.querySelector('.chat-avatar').textContent = initials;
-  document.querySelector('.chat-who .nm').textContent = name;
-  document.querySelector('.chat-who .role').innerHTML = role;
-  const chatBodyEl = document.getElementById('chatBody');
-  if (chatBodyEl) {
-    chatBodyEl.innerHTML = '';
-    if (firstMsg) addMessage(firstMsg, who);
-  }
-}
+// ===================== CIERRE DE SESIÓN =====================
 
-function addMessage(text, who) {
-  const chatBodyEl = document.getElementById('chatBody');
-  if (!chatBodyEl) return;
-  const div = document.createElement('div');
-  div.className = 'msg ' + who;
-  const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
-  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
-  chatBodyEl.appendChild(div);
-  chatBodyEl.scrollTop = chatBodyEl.scrollHeight;
-}
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  if (userRole === 'mensajero') stopWatchingMensajero();
+  
+  try {
+    await _supabase.auth.signOut();
+  } catch(e) { /* ignorar */ }
+  
+  currentUser = null;
+  userRole = null;
+  
+  document.getElementById('view-role').classList.remove('authenticated');
+  document.getElementById('app').classList.add('pre-role');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-role').classList.add('active');
+  
+  document.getElementById('authPass').value = '';
+  document.getElementById('authEmail').value = '';
+  
+  showToast('👋 Sesión cerrada');
+});
 
-function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
-}
-
-/* ===================== INICIALIZACIÓN ===================== */
+// ===================== INICIALIZACIÓN =====================
 
 async function initApp() {
   try {
@@ -2036,7 +2046,7 @@ async function initApp() {
   document.getElementById('app').classList.add('pre-role');
 }
 
-/* ===================== MAPA CLIENTE ===================== */
+// ===================== MAPA CLIENTE =====================
 
 function initClienteMap() {
   if (map) return;
@@ -2090,8 +2100,6 @@ function courierIcon(vehicle) {
     className: '', iconSize:[28,28], iconAnchor:[14,14]
   });
 }
-
-const RANGO_KM = 1.8;
 
 async function generateCouriers(center) {
   couriers = [];
@@ -2252,26 +2260,7 @@ async function reverseGeocode(latlng) {
   return formatCoord(latlng);
 }
 
-/* ===================== RUTA / DISTANCIA ===================== */
-
-let _routeCalcId = 0;
-
-function haversineKm(a, b) {
-  const R = 6371;
-  const dLat = (b.lat - a.lat) * Math.PI/180;
-  const dLng = (b.lng - a.lng) * Math.PI/180;
-  const la1 = a.lat * Math.PI/180;
-  const la2 = b.lat * Math.PI/180;
-  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-function calcularCosto(vehicleKey, km, sizeExtraVal, weightVal) {
-  const veh = VEHICLES[vehicleKey];
-  const distancia = Math.max(veh.base + km * veh.porKm, TARIFA.minimo);
-  const peso = weightVal > 3 ? (weightVal - 3) * 0.50 : 0;
-  return { distancia, sizeExtra: sizeExtraVal, peso, total: distancia + sizeExtraVal + peso };
-}
+// ===================== RUTA / DISTANCIA =====================
 
 async function recalcRoute() {
   if (!origin || !dest) return;
@@ -2364,7 +2353,7 @@ function updateButton() {
   }
 }
 
-/* ===================== VEHÍCULO ===================== */
+// ===================== VEHÍCULO =====================
 
 document.querySelectorAll('#vehicleOptions .size-card').forEach(card => {
   card.addEventListener('click', () => {
@@ -2376,7 +2365,7 @@ document.querySelectorAll('#vehicleOptions .size-card').forEach(card => {
   });
 });
 
-/* ===================== TAMAÑO Y PESO ===================== */
+// ===================== TAMAÑO Y PESO =====================
 
 document.querySelectorAll('#sizeOptions .size-card').forEach(card => {
   card.addEventListener('click', () => {
@@ -2416,7 +2405,7 @@ document.getElementById('wVal').addEventListener('blur', () => {
   updatePrice();
 });
 
-/* ===================== BOTONES ===================== */
+// ===================== BOTONES =====================
 
 document.getElementById('btnReset').addEventListener('click', resetPoints);
 document.getElementById('btnReset2').addEventListener('click', resetPoints);
@@ -2468,7 +2457,7 @@ document.getElementById('btnLocate').addEventListener('click', () => {
   );
 });
 
-/* ===================== BOTÓN SOLICITAR ===================== */
+// ===================== BOTÓN SOLICITAR =====================
 
 let courierLiveMarker = null;
 let courierLiveChannel = null;
@@ -2478,17 +2467,23 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'CREANDO PEDIDO...';
   
-  const user = (await _supabase.auth.getUser()).data.user;
-  if (!user) {
+  if (!currentUser) {
     showToast('🔒 Debes iniciar sesión');
     btn.disabled = false;
     btn.textContent = 'Solicitar repartidor';
     return;
   }
 
+  const user = currentUser.user;
+  
   const { error: profileError } = await _supabase
     .from('clientes')
-    .upsert({ id: user.id, nombre: currentUser?.perfil?.nombre || 'Usuario' }, { onConflict: 'id', ignoreDuplicates: true });
+    .upsert({ 
+      id: user.id, 
+      nombre: currentUser.perfil?.nombre || 'Usuario',
+      email: user.email 
+    }, { onConflict: 'id', ignoreDuplicates: true });
+  
   if (profileError) {
     showToast('❌ Error al verificar tu perfil: ' + profileError.message);
     btn.disabled = false;
@@ -2687,8 +2682,8 @@ function subscribeToChat(orderId) {
       table: 'chats', 
       filter: `pedido_id=eq.${orderId}` 
     }, async (payload) => {
-      const user = (await _supabase.auth.getUser()).data.user;
-      if (payload.new.remitente_id !== user.id) {
+      if (!currentUser) return;
+      if (payload.new.remitente_id !== currentUser.user.id) {
         addMessage(payload.new.mensaje, 'them');
         document.getElementById('chatBadge').style.display = 'block';
       }
@@ -2696,7 +2691,7 @@ function subscribeToChat(orderId) {
     .subscribe();
 }
 
-/* ===================== CHAT ===================== */
+// ===================== CHAT =====================
 
 document.getElementById('btnSend').addEventListener('click', sendMessage);
 document.getElementById('chatInput').addEventListener('keypress', e => {
@@ -2711,7 +2706,6 @@ async function sendMessage() {
   addMessage(text, 'me');
   input.value = '';
   
-  // Respuesta automática del repartidor
   setTimeout(() => {
     const respuestas = [
       'Claro, voy en camino 🚴',
@@ -2725,7 +2719,7 @@ async function sendMessage() {
   }, 1000 + Math.random() * 2000);
 }
 
-/* ===================== NAVEGACIÓN ENTRE VISTAS ===================== */
+// ===================== NAVEGACIÓN ENTRE VISTAS =====================
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -2746,7 +2740,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
-/* ===================== MODO MENSAJERO ===================== */
+// ===================== MODO MENSAJERO =====================
 
 function initMensajeroMode() {
   if (!mensajeroMap) {
@@ -3069,7 +3063,7 @@ document.addEventListener('visibilitychange', async () => {
   }
 });
 
-/* Selector de vehículo del mensajero */
+// Selector de vehículo del mensajero
 document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card => {
   card.addEventListener('click', () => {
     document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(c => c.classList.remove('active'));
@@ -3082,7 +3076,7 @@ document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(card =>
   });
 });
 
-/* Disponibilidad */
+// Disponibilidad
 document.getElementById('availToggle').addEventListener('change', async (e) => {
   const on = e.target.checked;
   
@@ -3342,7 +3336,7 @@ function renderActiveDelivery() {
   }
 }
 
-/* ===================== HISTORIAL DE ENTREGAS ===================== */
+// ===================== HISTORIAL DE ENTREGAS =====================
 
 function registrarEntregaEnHistorial(order) {
   const entry = {
@@ -3456,11 +3450,10 @@ document.querySelector('#navMensajero .nav-btn[data-view="view-historial-mensaje
     if (badge) badge.style.display = 'none';
   });
 
-/* ===================== INICIALIZACIÓN GLOBAL ===================== */
+// ===================== INICIALIZACIÓN GLOBAL =====================
 
 document.addEventListener('DOMContentLoaded', initApp);
 
-// Asegurar que los mapas se redibujen cuando cambie el tamaño
 window.addEventListener('resize', () => {
   if (map) setTimeout(() => map.invalidateSize(), 200);
   if (mensajeroMap) setTimeout(() => mensajeroMap.invalidateSize(), 200);
