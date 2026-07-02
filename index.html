@@ -291,9 +291,37 @@ const AuthService = {
 
   /* -------- MAPA CLIENTE -------- */
   #map{ width:100%; height:42%; min-height:200px; flex-shrink:0; }
+  #mapaClienteFull{ width:100%; height:42%; min-height:200px; flex-shrink:0; }
 
   /* -------- MAPA MENSAJERO -------- */
   #mapMensajero{ width:100%; height:36%; min-height:180px; flex-shrink:0; }
+
+  /* -------- MAPA DEDICADO MENSAJERO -------- */
+  .map-full-wrap{ position:relative; flex:1; display:flex; overflow:hidden; }
+  #mapaMensajeroFull{ width:100%; height:100%; }
+  .map-full-empty{
+    position:absolute; inset:0; z-index:15;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+    text-align:center; padding:30px;
+    background: var(--night);
+  }
+  .map-full-overlay{
+    position:absolute; left:14px; right:14px; bottom:14px; z-index:20;
+    background: rgba(18,18,18,0.88);
+    backdrop-filter: var(--blur-md);
+    -webkit-backdrop-filter: var(--blur-md);
+    border:1px solid var(--glass-line);
+    border-radius: var(--radius);
+    padding:14px 16px;
+    box-shadow: var(--shadow-lg), var(--shine-top);
+  }
+  .mfo-top{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:4px; }
+  .mfo-status{
+    font-family:'Sora'; font-weight:800; font-size:0.82rem; color:var(--kiwi);
+    text-shadow:0 0 10px var(--kiwi-glow);
+  }
+  .mfo-client{ font-size:0.76rem; color:var(--muted); font-weight:600; }
+  .mfo-addr{ font-size:0.74rem; color:rgba(255,255,255,0.75); line-height:1.4; }
 
   .map-hint{
     position:absolute; top:70px; left:50%;
@@ -898,6 +926,41 @@ const AuthService = {
     border-color: var(--kiwi);
     color: var(--kiwi-light);
   }
+
+  /* -------- MIS PEDIDOS (CLIENTE) -------- */
+  .pl-card{
+    background: var(--glass-1);
+    border:1px solid var(--glass-line);
+    backdrop-filter:var(--blur-sm);
+    border-radius:var(--radius);
+    padding:14px 16px; margin-bottom:12px;
+    box-shadow: var(--shadow-sm), var(--shine-top);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .pl-card.route-active{
+    border-color: var(--kiwi);
+    box-shadow: var(--shadow-md), var(--shine-top), 0 0 0 1px var(--kiwi-glow);
+  }
+  .pl-top{ display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; }
+  .pl-date{ font-size:0.72rem; color:var(--muted); font-weight:600; }
+  .pl-badge{
+    font-size:0.64rem; font-weight:800; letter-spacing:0.03em; text-transform:uppercase;
+    padding:3px 9px; border-radius:999px; flex-shrink:0;
+  }
+  .pl-badge.buscando{ background:rgba(255,193,7,0.15); color:#ffc107; border:1px solid rgba(255,193,7,0.3); }
+  .pl-badge.aceptado{ background:var(--kiwi-dim); color:var(--kiwi); border:1px solid rgba(137,233,0,0.3); }
+  .pl-badge.completado{ background:rgba(255,255,255,0.08); color:var(--muted); border:1px solid var(--glass-line); }
+  .pl-badge.cancelado{ background:rgba(255,90,90,0.12); color:#ff5a5a; border:1px solid rgba(255,90,90,0.28); }
+  .pl-addr{ font-size:0.74rem; color:rgba(255,255,255,0.75); line-height:1.5; margin-bottom:10px; }
+  .pl-addr b{ color:var(--white); font-weight:600; }
+  .pl-meta{ display:flex; justify-content:space-between; align-items:center; }
+  .pl-pay{ font-weight:800; color:var(--kiwi); font-size:0.9rem; font-family:'Sora'; }
+  .pl-btn{
+    border:1px solid var(--glass-edge); background:var(--glass-1); color:var(--white);
+    border-radius:999px; padding:7px 14px; font-size:0.72rem; font-weight:700;
+    cursor:pointer; backdrop-filter:var(--blur-sm);
+  }
+  .pl-btn:active{ transform:scale(0.96); }
 
   /* -------- ACTIVE DELIVERY CARD (mensajero) -------- */
   .active-card{
@@ -1611,39 +1674,74 @@ const AuthService = {
     </div>
   </div>
 
-  <!-- VISTA: CHAT CLIENTE -->
+  <!-- VISTA: CONTACTO CLIENTE -->
   <div class="view" id="view-chat">
     <div class="chat-header">
-      <div class="chat-avatar">CR</div>
+      <div class="chat-avatar" id="chatAvatarCliente">··</div>
       <div class="chat-who">
-        <div class="nm">Carlos R. · Repartidor</div>
-        <div class="role">● En camino</div>
+        <div class="nm" id="chatNombreCliente">Esperando repartidor...</div>
+        <div class="role" id="chatRoleCliente">● Sin pedido activo</div>
       </div>
     </div>
-    <div class="chat-body" id="chatBody"></div>
-    <div class="chat-input">
-      <input type="text" id="chatInput" placeholder="Escribe un mensaje...">
-      <button id="btnSend">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>
-      </button>
+    <div class="chat-body" id="chatBody" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:32px 24px;">
+      <div style="font-size:2.4rem;">💬</div>
+      <div style="font-family:'Sora';font-weight:700;color:var(--white);font-size:0.92rem;" id="chatClienteMsgTitle">Aún no tienes un repartidor asignado</div>
+      <div style="font-size:0.78rem;color:var(--muted);max-width:250px;line-height:1.5;" id="chatClienteMsgSub">En cuanto alguien acepte tu pedido, aquí podrás escribirle directo por WhatsApp.</div>
+    </div>
+    <div class="chat-input" style="display:block; padding:14px 16px;">
+      <a href="#" id="waLinkCliente" class="cta-wa" target="_blank" rel="noopener" style="pointer-events:none; opacity:0.45;">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347"/></svg>
+        Escribir por WhatsApp
+      </a>
     </div>
   </div>
 
-  <!-- VISTA: CHAT MENSAJERO -->
+  <!-- VISTA: MAPA Y REGISTRO DE PEDIDOS DEL CLIENTE -->
+  <div class="view" id="view-mapa-cliente">
+    <div style="position:relative; flex-shrink:0;">
+      <div id="mapaClienteFull"></div>
+      <div class="map-full-empty" id="mapaClienteFullEmpty">
+        <span style="font-size:2rem;">🗺️</span>
+        <div style="font-family:'Sora'; font-weight:700; color:var(--white); font-size:0.85rem;">Sin pedido en curso</div>
+        <div style="font-size:0.72rem; color:var(--muted); max-width:220px;">Cuando tengas un pedido activo, aquí verás la ruta y a tu repartidor en vivo.</div>
+      </div>
+      <div class="map-full-overlay" id="mapaClienteFullOverlay" style="display:none;">
+        <div class="mfo-top">
+          <span class="mfo-status" id="mapaClienteFullStatus">Buscando repartidor</span>
+          <span class="mfo-client" id="mapaClienteFullEta"></span>
+        </div>
+        <div class="mfo-addr" id="mapaClienteFullAddr"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">Mis pedidos</div>
+      <div class="panel-sub">Registro de tus pedidos, en curso y anteriores.</div>
+      <div id="misPedidosList">
+        <div class="empty-result">Inicia sesión para ver tu registro de pedidos.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VISTA: CONTACTO MENSAJERO -->
   <div class="view" id="view-chatmensajero">
     <div class="chat-header">
-      <div class="chat-avatar" id="chatAvatarMensajero">CL</div>
+      <div class="chat-avatar" id="chatAvatarMensajero">··</div>
       <div class="chat-who">
-        <div class="nm" id="chatNombreMensajero">Cliente</div>
+        <div class="nm" id="chatNombreMensajero">Esperando pedido...</div>
         <div class="role" id="chatRoleMensajero">● Sin pedido activo</div>
       </div>
     </div>
-    <div class="chat-body" id="chatBodyMensajero"></div>
-    <div class="chat-input">
-      <input type="text" id="chatInputMensajero" placeholder="Escribe un mensaje...">
-      <button id="btnSendMensajero">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>
-      </button>
+    <div class="chat-body" id="chatBodyMensajero" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:32px 24px;">
+      <div style="font-size:2.4rem;">💬</div>
+      <div style="font-family:'Sora';font-weight:700;color:var(--white);font-size:0.92rem;" id="chatMensajeroMsgTitle">Aún no tienes un pedido activo</div>
+      <div style="font-size:0.78rem;color:var(--muted);max-width:250px;line-height:1.5;" id="chatMensajeroMsgSub">En cuanto aceptes un pedido, aquí podrás escribirle al cliente directo por WhatsApp.</div>
+    </div>
+    <div class="chat-input" style="display:block; padding:14px 16px;">
+      <a href="#" id="waLinkMensajero" class="cta-wa" target="_blank" rel="noopener" style="pointer-events:none; opacity:0.45;">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347"/></svg>
+        Escribir por WhatsApp
+      </a>
     </div>
   </div>
 
@@ -1738,10 +1836,35 @@ const AuthService = {
     </div>
   </div>
 
+  <!-- VISTA: MAPA DEDICADO DEL MENSAJERO -->
+  <div class="view" id="view-mapa-mensajero">
+    <div class="map-full-wrap">
+      <div id="mapaMensajeroFull"></div>
+
+      <div class="map-full-empty" id="mapaMensajeroFullEmpty">
+        <span style="font-size:2.2rem;">🗺️</span>
+        <div style="font-family:'Sora'; font-weight:700; color:var(--white);">Sin pedido en curso</div>
+        <div style="font-size:0.78rem; color:var(--muted); max-width:240px;">Cuando aceptes un pedido, aquí podrás seguir la ruta en grande.</div>
+      </div>
+
+      <div class="map-full-overlay" id="mapaMensajeroFullOverlay" style="display:none;">
+        <div class="mfo-top">
+          <span class="mfo-status" id="mapaMensajeroFullStatus">Hacia recogida</span>
+          <span class="mfo-client" id="mapaMensajeroFullClient"></span>
+        </div>
+        <div class="mfo-addr" id="mapaMensajeroFullAddr"></div>
+      </div>
+    </div>
+  </div>
+
   <nav class="bottom-nav" id="navCliente">
     <button class="nav-btn active" data-view="view-pedido">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></svg>
       Pedido
+    </button>
+    <button class="nav-btn" data-view="view-mapa-cliente">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20 3 17V4l6 3m0 13 6-3m-6 3V7m6 10 6 3V7l-6-3m0 13V4m0 0L9 7"/></svg>
+      Mapa
     </button>
     <button class="nav-btn" data-view="view-chat">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-1.3 4.5L21 21l-5-1.3a8.5 8.5 0 1 1 5-8.2Z"/></svg>
@@ -1754,6 +1877,10 @@ const AuthService = {
     <button class="nav-btn active" data-view="view-mensajero">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/></svg>
       Pedidos
+    </button>
+    <button class="nav-btn" data-view="view-mapa-mensajero">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20 3 17V4l6 3m0 13 6-3m-6 3V7m6 10 6 3V7l-6-3m0 13V4m0 0L9 7"/></svg>
+      Mapa
     </button>
     <button class="nav-btn" data-view="view-historial-mensajero">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
@@ -1803,11 +1930,21 @@ let mensajeroLayer = null;
 let mensajeroRangeCircle = null;
 let activeRouteLayer = null;
 let _activeRouteCalcId = 0;
+let mapaMensajeroFull = null;
+let mapaMensajeroFullRouteLayer = null;
+let mapaMensajeroFullMarker = null;
+let _fullRouteCalcId = 0;
+let mapaClienteFull = null;
+let mapaClienteFullRouteLayer = null;
+let mapaClienteFullCourierMarker = null;
+let misPedidos = [];
+let activeClientOrder = null;
 let mensajeroPos = null;
 let mensajeroVehiculo = 'moto';
 let mensajeroOrders = [];
 let orderLayersMap = {};
 let selectedOrderId = null;
+let pedidosLiveChannel = null;
 let activeDelivery = null;
 let deliveryHistory = [];
 let histFilterPeriod = 'all';
@@ -1851,29 +1988,42 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
-function addMessage(text, who) {
-  const chatBodyEl = document.getElementById('chatBody');
-  if (!chatBodyEl) return;
-  const div = document.createElement('div');
-  div.className = 'msg ' + who;
-  const time = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
-  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
-  chatBodyEl.appendChild(div);
-  chatBodyEl.scrollTop = chatBodyEl.scrollHeight;
+// ===================== CONTACTO WHATSAPP (reemplaza el chat interno) =====================
+
+function normalizarTelefonoWA(tel) {
+  if (!tel) return '';
+  let t = String(tel).replace(/[^\d+]/g, '');
+  if (t.startsWith('+')) t = t.slice(1);
+  if (!t.startsWith('53') && t.length <= 9) t = '53' + t; // asume Cuba si falta el código de país
+  return t;
 }
 
-function resetChat(who, name, role, initials, firstMsg) {
-  const chatAvatar = document.querySelector('.chat-avatar');
-  const chatWhoNm = document.querySelector('.chat-who .nm');
-  const chatWhoRole = document.querySelector('.chat-who .role');
-  const chatBodyEl = document.getElementById('chatBody');
-  
-  if (chatAvatar) chatAvatar.textContent = initials;
-  if (chatWhoNm) chatWhoNm.textContent = name;
-  if (chatWhoRole) chatWhoRole.innerHTML = role;
-  if (chatBodyEl) {
-    chatBodyEl.innerHTML = '';
-    if (firstMsg) addMessage(firstMsg, who);
+// view: 'Cliente' | 'Mensajero'
+function actualizarContactoWhatsApp(view, { avatar, nombre, role, telefono, mensaje, tituloVacio, subVacio }) {
+  const avatarEl = document.getElementById(`chatAvatar${view}`);
+  const nombreEl = document.getElementById(`chatNombre${view}`);
+  const roleEl = document.getElementById(`chatRole${view}`);
+  const link = document.getElementById(`waLink${view}`);
+  const tituloEl = document.getElementById(`chat${view}MsgTitle`);
+  const subEl = document.getElementById(`chat${view}MsgSub`);
+
+  if (avatarEl) avatarEl.textContent = avatar || '··';
+  if (nombreEl) nombreEl.textContent = nombre;
+  if (roleEl) roleEl.innerHTML = role;
+  if (tituloEl && tituloVacio) tituloEl.textContent = tituloVacio;
+  if (subEl && subVacio) subEl.textContent = subVacio;
+
+  const tel = normalizarTelefonoWA(telefono);
+  if (link) {
+    if (tel) {
+      link.href = `https://wa.me/${tel}${mensaje ? '?text=' + encodeURIComponent(mensaje) : ''}`;
+      link.style.pointerEvents = 'auto';
+      link.style.opacity = '1';
+    } else {
+      link.href = '#';
+      link.style.pointerEvents = 'none';
+      link.style.opacity = '0.45';
+    }
   }
 }
 
@@ -2070,8 +2220,14 @@ function setRole(role) {
     document.getElementById('view-pedido').classList.add('active');
     document.querySelector('#navCliente .nav-btn[data-view="view-pedido"]').classList.add('active');
     document.getElementById('roleBarLabel').textContent = `📦 ${currentUser?.perfil?.nombre || 'Cliente'} · Tengo un paquete`;
-    resetChat('them', 'Carlos R. · Repartidor', '● En camino', 'CR', 'Hola, ya estoy en camino para recoger tu pedido.');
+    actualizarContactoWhatsApp('Cliente', {
+      avatar: '··', nombre: 'Esperando repartidor...', role: '● Sin pedido activo', telefono: null,
+      tituloVacio: 'Aún no tienes un repartidor asignado',
+      subVacio: 'En cuanto alguien acepte tu pedido, aquí podrás escribirle directo por WhatsApp.'
+    });
     initClienteMap();
+    cargarMisPedidos();
+    restaurarPedidoActivoCliente();
     setTimeout(() => map?.invalidateSize(), 100);
   } else {
     document.getElementById('navCliente').style.display = 'none';
@@ -2079,7 +2235,11 @@ function setRole(role) {
     document.getElementById('view-mensajero').classList.add('active');
     document.querySelector('#navMensajero .nav-btn[data-view="view-mensajero"]').classList.add('active');
     document.getElementById('roleBarLabel').textContent = `🛵 ${currentUser?.perfil?.nombre || 'Mensajero'} · Disponible`;
-    resetChat('them', 'Esperando pedido...', '● Sin pedido activo', '··', null);
+    actualizarContactoWhatsApp('Mensajero', {
+      avatar: '··', nombre: 'Esperando pedido...', role: '● Sin pedido activo', telefono: null,
+      tituloVacio: 'Aún no tienes un pedido activo',
+      subVacio: 'En cuanto aceptes un pedido, aquí podrás escribirle al cliente directo por WhatsApp.'
+    });
     initMensajeroMode();
   }
 }
@@ -2206,6 +2366,219 @@ function initClienteMap() {
   setTimeout(() => map.invalidateSize(), 350);
 }
 
+// -------- Mapa dedicado del cliente (pestaña "Mapa") --------
+function ensureMapaClienteFull() {
+  if (mapaClienteFull) return mapaClienteFull;
+  mapaClienteFull = L.map('mapaClienteFull', {
+    zoomControl: false,
+    fadeAnimation: true,
+    zoomAnimation: true,
+    markerZoomAnimation: true,
+    preferCanvas: true
+  }).setView([23.1136, -82.3666], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    detectRetina: true,
+    keepBuffer: 4,
+    updateWhenIdle: false,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(mapaClienteFull);
+  return mapaClienteFull;
+}
+
+function renderMapaClienteFullOverlay() {
+  const overlay = document.getElementById('mapaClienteFullOverlay');
+  const empty = document.getElementById('mapaClienteFullEmpty');
+  if (!overlay || !empty) return;
+
+  if (!activeClientOrder) {
+    overlay.style.display = 'none';
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+  overlay.style.display = '';
+
+  const o = activeClientOrder;
+  document.getElementById('mapaClienteFullStatus').textContent = o.estado === 'aceptado'
+    ? `🛵 ${o.courierName} viene hacia ti`
+    : '📡 Buscando repartidor...';
+  document.getElementById('mapaClienteFullEta').textContent = o.etaMin ? `~${o.etaMin} min` : '';
+  document.getElementById('mapaClienteFullAddr').textContent = o.destinoTexto || '';
+}
+
+async function dibujarRutaClienteFull(origenPunto, destinoPunto) {
+  ensureMapaClienteFull();
+  if (mapaClienteFullRouteLayer) mapaClienteFull.removeLayer(mapaClienteFullRouteLayer);
+  mapaClienteFullRouteLayer = L.featureGroup().addTo(mapaClienteFull);
+
+  L.marker(origenPunto, { icon: pickupIconFull }).bindPopup('Punto de recogida').addTo(mapaClienteFullRouteLayer);
+  L.marker(destinoPunto, { icon: dropIconFull }).bindPopup('Punto de entrega').addTo(mapaClienteFullRouteLayer);
+
+  await drawOsrmLeg(
+    mapaClienteFullRouteLayer, origenPunto, destinoPunto,
+    { color: '#89e900', weight: 4, opacity: 0.85 },
+    { color: '#89e900', weight: 4, opacity: 0.85, dashArray: '2 8' }
+  );
+
+  mapaClienteFull.fitBounds(mapaClienteFullRouteLayer.getBounds(), { padding: [30, 30] });
+}
+
+const ESTADO_PEDIDO_LABEL = { buscando: 'Buscando repartidor', aceptado: 'En camino', recogido: 'Paquete recogido', completado: 'Entregado', cancelado: 'Cancelado' };
+
+// Vuelve a engancharse a un pedido en curso cuando el cliente reabre o recarga la app,
+// para que las notificaciones y el estado no dependan de mantener la pestaña abierta.
+async function restaurarPedidoActivoCliente() {
+  if (!currentUser) return;
+
+  const { data: pedidos, error } = await _supabase
+    .from('pedidos')
+    .select('*')
+    .eq('cliente_id', currentUser.user.id)
+    .in('estado', ['buscando', 'aceptado', 'recogido'])
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) { console.error('Error al restaurar pedido activo:', error); return; }
+  if (!pedidos || !pedidos.length) return;
+
+  const pedido = pedidos[0];
+  showToast('📦 Tienes un pedido en curso');
+
+  if ((pedido.estado === 'aceptado' || pedido.estado === 'recogido') && pedido.mensajero_id) {
+    const { data: mensajero, error: errMensajero } = await _supabase
+      .from('mensajeros').select('*').eq('id', pedido.mensajero_id).single();
+    if (errMensajero) console.error('No se pudo leer el mensajero asignado:', errMensajero);
+    if (mensajero) {
+      actualizarContactoWhatsApp('Cliente', {
+        avatar: mensajero.nombre.slice(0, 2).toUpperCase(),
+        nombre: `${mensajero.nombre} · Repartidor`,
+        role: pedido.estado === 'recogido' ? '● Recogido, en camino a tu entrega' : '● En camino',
+        telefono: mensajero.telefono,
+        mensaje: `¡Hola ${mensajero.nombre}! Te escribo por mi pedido.`
+      });
+    }
+  }
+
+  _supabase
+    .channel(`pedido-restore-${pedido.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE', schema: 'public', table: 'pedidos', filter: `id=eq.${pedido.id}`
+    }, async (payload) => {
+      const updatedPedido = payload.new;
+      if (updatedPedido.estado === 'aceptado' && updatedPedido.mensajero_id) {
+        const { data: mensajero } = await _supabase.from('mensajeros').select('*').eq('id', updatedPedido.mensajero_id).single();
+        if (mensajero) {
+          showToast(`✅ ${mensajero.nombre} aceptó tu pedido`);
+          actualizarContactoWhatsApp('Cliente', {
+            avatar: mensajero.nombre.slice(0, 2).toUpperCase(),
+            nombre: `${mensajero.nombre} · Repartidor`,
+            role: '● En camino',
+            telefono: mensajero.telefono,
+            mensaje: `¡Hola ${mensajero.nombre}! Te escribo por mi pedido.`
+          });
+        }
+        cargarMisPedidos();
+      } else if (updatedPedido.estado === 'recogido') {
+        showToast('📦 Tu repartidor recogió el paquete, va hacia la entrega');
+        cargarMisPedidos();
+      } else if (updatedPedido.estado === 'completado') {
+        showToast('📦 ¡Tu pedido fue entregado!');
+        actualizarContactoWhatsApp('Cliente', {
+          avatar: '··', nombre: 'Esperando repartidor...', role: '● Sin pedido activo', telefono: null,
+          tituloVacio: 'Aún no tienes un repartidor asignado',
+          subVacio: 'En cuanto alguien acepte tu pedido, aquí podrás escribirle directo por WhatsApp.'
+        });
+        cargarMisPedidos();
+      }
+    })
+    .subscribe();
+}
+
+async function cargarMisPedidos() {
+  const list = document.getElementById('misPedidosList');
+  if (!list) return;
+  if (!currentUser) {
+    list.innerHTML = '<div class="empty-result">Inicia sesión para ver tu registro de pedidos.</div>';
+    return;
+  }
+
+  const { data, error } = await _supabase
+    .from('pedidos')
+    .select('*')
+    .eq('cliente_id', currentUser.user.id)
+    .order('created_at', { ascending: false })
+    .limit(30);
+
+  if (error) {
+    console.error('Error al cargar mis pedidos:', error);
+    list.innerHTML = '<div class="empty-result">No se pudo cargar tu registro de pedidos.</div>';
+    return;
+  }
+
+  misPedidos = data || [];
+  renderMisPedidosList();
+}
+
+function renderMisPedidosList() {
+  const list = document.getElementById('misPedidosList');
+  if (!list) return;
+
+  if (misPedidos.length === 0) {
+    list.innerHTML = '<div class="empty-result">Aún no tienes pedidos. ¡Solicita tu primer repartidor!</div>';
+    return;
+  }
+
+  list.innerHTML = misPedidos.map(o => {
+    const estado = o.estado || 'buscando';
+    const fecha = o.created_at
+      ? new Date(o.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : '';
+    return `
+    <div class="pl-card" data-id="${o.id}">
+      <div class="pl-top">
+        <span class="pl-date">${fecha}</span>
+        <span class="pl-badge ${estado}">${ESTADO_PEDIDO_LABEL[estado] || estado}</span>
+      </div>
+      <div class="pl-addr">
+        ${o.origen_texto ? `<div>📦 <b>Recogida:</b> ${o.origen_texto}</div>` : ''}
+        ${o.destino_texto ? `<div>🏁 <b>Entrega:</b> ${o.destino_texto}</div>` : ''}
+      </div>
+      <div class="pl-meta">
+        <span class="pl-pay">$${Number(o.costo_total || 0).toFixed(2)}</span>
+        <button class="pl-btn" data-id="${o.id}">Ver ruta</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.pl-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const order = misPedidos.find(o => o.id === btn.dataset.id);
+      if (order) mostrarRutaPedidoLog(order);
+    });
+  });
+}
+
+async function mostrarRutaPedidoLog(o) {
+  ensureMapaClienteFull();
+  setTimeout(() => mapaClienteFull.invalidateSize(), 60);
+
+  document.querySelectorAll('.pl-card').forEach(c => c.classList.remove('route-active'));
+  const card = document.querySelector(`.pl-card[data-id="${o.id}"]`);
+  if (card) card.classList.add('route-active');
+
+  if (o.origen_lat == null || o.destino_lat == null) {
+    showToast('Este pedido no tiene coordenadas guardadas');
+    return;
+  }
+
+  document.getElementById('mapaClienteFullEmpty').style.display = 'none';
+  await dibujarRutaClienteFull(
+    { lat: o.origen_lat, lng: o.origen_lng },
+    { lat: o.destino_lat, lng: o.destino_lng }
+  );
+}
+
 const originIcon = L.divIcon({
   html: '<div style="background:#89e900;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
   className: '', iconSize:[16,16], iconAnchor:[8,8]
@@ -2214,6 +2587,15 @@ const originIcon = L.divIcon({
 const destIcon = L.divIcon({
   html: '<div style="background:#89e900;width:16px;height:16px;border-radius:3px;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
   className: '', iconSize:[16,16], iconAnchor:[8,8]
+});
+
+const pickupIconFull = L.divIcon({
+  html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #89e900;box-shadow:0 1px 4px rgba(0,0,0,.25)">📦</div>',
+  className: '', iconSize: [26, 26], iconAnchor: [13, 13]
+});
+const dropIconFull = L.divIcon({
+  html: '<div style="background:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;border:2px solid #ff5a5a;box-shadow:0 1px 4px rgba(0,0,0,.25)">🏁</div>',
+  className: '', iconSize: [26, 26], iconAnchor: [13, 13]
 });
 
 function courierIcon(vehicle) {
@@ -2653,6 +3035,18 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
   showToast('📡 Buscando repartidor en tiempo real...');
   btn.textContent = 'BUSCANDO...';
 
+  activeClientOrder = {
+    id: pedido.id,
+    destinoTexto: document.getElementById('destText').textContent,
+    estado: 'buscando',
+    courierName: null,
+    vehiculo: null,
+    etaMin: null
+  };
+  renderMapaClienteFullOverlay();
+  dibujarRutaClienteFull({ lat: origin.lat, lng: origin.lng }, { lat: dest.lat, lng: dest.lng });
+  cargarMisPedidos();
+
   const channel = _supabase
     .channel(`pedido-${pedido.id}`)
     .on('postgres_changes', { 
@@ -2664,7 +3058,14 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
       const updatedPedido = payload.new;
       if (updatedPedido.estado === 'aceptado' && updatedPedido.mensajero_id) {
         _supabase.from('mensajeros').select('*').eq('id', updatedPedido.mensajero_id).single()
-          .then(({data: mensajero}) => {
+          .then(({data: mensajero, error: errMensajero}) => {
+            if (errMensajero) {
+              console.error('No se pudo leer el mensajero asignado (revisa las políticas RLS de la tabla mensajeros):', errMensajero);
+              showToast('✅ Tu pedido fue aceptado');
+              activeClientOrder && (activeClientOrder.estado = 'aceptado');
+              cargarMisPedidos();
+              return;
+            }
             if (mensajero) {
               const veh = VEHICLES[mensajero.vehiculo || 'moto'];
               const dist = (mensajero.lat && mensajero.lng)
@@ -2675,7 +3076,8 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
               showToast(`✅ ${mensajero.nombre} aceptó tu pedido`);
               asignarRepartidorAlChat({
                 name: mensajero.nombre,
-                vehicle: mensajero.vehiculo || 'moto'
+                vehicle: mensajero.vehiculo || 'moto',
+                telefono: mensajero.telefono
               }, etaMin);
               mostrarBotonesPostSolicitud({
                 name: mensajero.nombre,
@@ -2684,15 +3086,39 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
               document.getElementById('chatBadge').style.display = 'block';
               btn.textContent = 'PEDIDO EN CURSO';
 
+              if (activeClientOrder) {
+                activeClientOrder.estado = 'aceptado';
+                activeClientOrder.courierName = mensajero.nombre;
+                activeClientOrder.vehiculo = mensajero.vehiculo || 'moto';
+                activeClientOrder.etaMin = etaMin;
+                renderMapaClienteFullOverlay();
+              }
+              cargarMisPedidos();
+
               trackAssignedCourier(mensajero.id, mensajero.vehiculo || 'moto');
-              subscribeToChat(pedido.id);
             }
           });
+      } else if (updatedPedido.estado === 'recogido') {
+        showToast('📦 Tu repartidor recogió el paquete, va hacia la entrega');
+        if (activeClientOrder) {
+          activeClientOrder.estado = 'recogido';
+          document.getElementById('mapaClienteFullStatus').textContent = '🏁 En camino a tu entrega';
+        }
+        cargarMisPedidos();
       } else if (updatedPedido.estado === 'completado') {
         showToast('📦 ¡Tu pedido fue entregado!');
         if (courierLiveChannel) { _supabase.removeChannel(courierLiveChannel); courierLiveChannel = null; }
         if (courierLiveMarker) { map.removeLayer(courierLiveMarker); courierLiveMarker = null; }
+        if (mapaClienteFullCourierMarker) { mapaClienteFull && mapaClienteFull.removeLayer(mapaClienteFullCourierMarker); mapaClienteFullCourierMarker = null; }
+        activeClientOrder = null;
+        renderMapaClienteFullOverlay();
+        cargarMisPedidos();
         btn.textContent = 'PEDIDO ENTREGADO';
+        actualizarContactoWhatsApp('Cliente', {
+          avatar: '··', nombre: 'Esperando repartidor...', role: '● Sin pedido activo', telefono: null,
+          tituloVacio: 'Aún no tienes un repartidor asignado',
+          subVacio: 'En cuanto alguien acepte tu pedido, aquí podrás escribirle directo por WhatsApp.'
+        });
       }
     })
     .subscribe();
@@ -2707,7 +3133,10 @@ function trackAssignedCourier(mensajeroId, vehiculo) {
   couriers = [];
   if (couriersLayer) couriersLayer.clearLayers();
   if (rangeCircle) { map.removeLayer(rangeCircle); rangeCircle = null; }
-  
+
+  ensureMapaClienteFull();
+  if (mapaClienteFullCourierMarker) { mapaClienteFull.removeLayer(mapaClienteFullCourierMarker); mapaClienteFullCourierMarker = null; }
+
   courierLiveChannel = _supabase
     .channel(`mensajero-live-${mensajeroId}`)
     .on('postgres_changes', {
@@ -2726,26 +3155,32 @@ function trackAssignedCourier(mensajeroId, vehiculo) {
       } else {
         courierLiveMarker.setLatLng(pos);
       }
+      if (!mapaClienteFullCourierMarker) {
+        mapaClienteFullCourierMarker = L.marker(pos, { icon: courierIcon(vehiculo), zIndexOffset: 900 })
+          .addTo(mapaClienteFull)
+          .bindPopup('🛵 Tu repartidor');
+      } else {
+        mapaClienteFullCourierMarker.setLatLng(pos);
+      }
     })
     .subscribe();
 }
 
 function asignarRepartidorAlChat(courier, etaMin) {
   const veh = VEHICLES[courier.vehicle];
-  document.querySelector('.chat-avatar').textContent = courier.name.slice(0,2).toUpperCase();
-  document.querySelector('.chat-who .nm').textContent = `${courier.name} · Repartidor`;
-  document.querySelector('.chat-who .role').innerHTML = `● En camino · ${veh.label} · ~${etaMin} min`;
-  addMessage(`¡Hola! Soy ${courier.name}, voy en ${veh.label.toLowerCase()} ${veh.icon} hacia el punto de recogida. Llego en unos ${etaMin} minutos.`, 'them');
-
   const ref = document.getElementById('addrDetail').value.trim();
-  const tel = document.getElementById('recipientPhone').value.trim();
-  if (ref || tel) {
-    let extra = 'Para la entrega: ';
-    if (ref) extra += `${ref}`;
-    if (ref && tel) extra += ' · ';
-    if (tel) extra += `Tel. de contacto ${tel}`;
-    addMessage(extra, 'me');
-  }
+  const destino = document.getElementById('destText').textContent;
+
+  let mensaje = `¡Hola ${courier.name}! Soy quien pidió el envío a ${destino}.`;
+  if (ref) mensaje += ` Referencia: ${ref}.`;
+
+  actualizarContactoWhatsApp('Cliente', {
+    avatar: courier.name.slice(0, 2).toUpperCase(),
+    nombre: `${courier.name} · Repartidor`,
+    role: `● En camino · ${veh.label} · ~${etaMin} min`,
+    telefono: courier.telefono,
+    mensaje
+  });
 }
 
 function mostrarBotonesPostSolicitud(asignado, etaMin) {
@@ -2799,52 +3234,6 @@ function mostrarBotonesPostSolicitud(asignado, etaMin) {
   };
 }
 
-function subscribeToChat(orderId) {
-  _supabase
-    .channel(`chat-${orderId}`)
-    .on('postgres_changes', { 
-      event: 'INSERT', 
-      schema: 'public', 
-      table: 'chats', 
-      filter: `pedido_id=eq.${orderId}` 
-    }, async (payload) => {
-      if (!currentUser) return;
-      if (payload.new.remitente_id !== currentUser.user.id) {
-        addMessage(payload.new.mensaje, 'them');
-        document.getElementById('chatBadge').style.display = 'block';
-      }
-    })
-    .subscribe();
-}
-
-// ===================== CHAT =====================
-
-document.getElementById('btnSend').addEventListener('click', sendMessage);
-document.getElementById('chatInput').addEventListener('keypress', e => {
-  if (e.key === 'Enter') sendMessage();
-});
-
-async function sendMessage() {
-  const input = document.getElementById('chatInput');
-  const text = input.value.trim();
-  if (!text) return;
-  
-  addMessage(text, 'me');
-  input.value = '';
-  
-  setTimeout(() => {
-    const respuestas = [
-      'Claro, voy en camino 🚴',
-      'Estoy a unos 5 minutos de la recogida.',
-      'Perfecto, te aviso cuando llegue.',
-      'Recibido, gracias por la información.',
-      '¡Listo! Ya tengo tu paquete.'
-    ];
-    const random = respuestas[Math.floor(Math.random() * respuestas.length)];
-    addMessage(random, 'them');
-  }, 1000 + Math.random() * 2000);
-}
-
 // ===================== NAVEGACIÓN ENTRE VISTAS =====================
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -2859,9 +3248,19 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
       document.getElementById('chatBadge').style.display = 'none';
       document.getElementById('chatBadgeMensajero').style.display = 'none';
     }
+    if (btn.dataset.view === 'view-mapa-mensajero') {
+      renderMapaMensajeroFull();
+    }
+    if (btn.dataset.view === 'view-mapa-cliente') {
+      ensureMapaClienteFull();
+      renderMapaClienteFullOverlay();
+      cargarMisPedidos();
+    }
     setTimeout(() => {
       if (map) map.invalidateSize();
       if (mensajeroMap) mensajeroMap.invalidateSize();
+      if (mapaMensajeroFull) mapaMensajeroFull.invalidateSize();
+      if (mapaClienteFull) mapaClienteFull.invalidateSize();
     }, 50);
   });
 });
@@ -2889,6 +3288,39 @@ function initMensajeroMode() {
   setTimeout(() => mensajeroMap.invalidateSize(), 80);
   setTimeout(() => mensajeroMap.invalidateSize(), 350);
   startWatchingMensajero();
+  startPedidosLiveChannel();
+}
+
+// Quita en tiempo real, de la lista de todos los repartidores, cualquier pedido
+// que acabe de ser aceptado por otro repartidor (o por uno mismo desde otra sesión).
+function startPedidosLiveChannel() {
+  if (pedidosLiveChannel) return;
+  pedidosLiveChannel = _supabase
+    .channel('pedidos-live-mensajero')
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'pedidos',
+      filter: 'estado=eq.aceptado'
+    }, (payload) => {
+      const updated = payload.new;
+      if (activeDelivery && activeDelivery.id === updated.id) return;
+
+      const existed = mensajeroOrders.some(o => o.id === updated.id);
+      if (!existed) return;
+
+      mensajeroOrders = mensajeroOrders.filter(o => o.id !== updated.id);
+      const entry = orderLayersMap[updated.id];
+      if (entry) {
+        mensajeroLayer.removeLayer(entry.group);
+        delete orderLayersMap[updated.id];
+      }
+      if (selectedOrderId === updated.id) selectedOrderId = null;
+
+      renderOrdersList();
+      showToast('⚡ Un pedido fue tomado por otro repartidor');
+    })
+    .subscribe();
 }
 
 function buildMensajeroIcon() {
@@ -3041,6 +3473,7 @@ function onMensajeroPosUpdate(pos, accuracyM) {
   }
 
   updateGpsStatusBar('ok', accuracyM);
+  updateMapaMensajeroFullPosition();
 
   // Generar pedidos si está disponible y no tiene pedido activo
   if (!activeDelivery && document.getElementById('availToggle').checked) {
@@ -3464,12 +3897,16 @@ async function aceptarPedido(order) {
 
   renderActiveDelivery();
   drawActiveRoute();
+  renderMapaMensajeroFull();
 
-  resetChat('them', `${order.cliente} · Cliente`, '● Pedido en curso', order.cliente.slice(0, 2).toUpperCase(), null);
-  addMessage('He aceptado tu pedido y voy en camino a recogerlo.', 'me');
+  actualizarContactoWhatsApp('Mensajero', {
+    avatar: order.cliente.slice(0, 2).toUpperCase(),
+    nombre: `${order.cliente} · Cliente`,
+    role: '● Pedido en curso',
+    telefono: order.telefonoCliente,
+    mensaje: `¡Hola ${order.cliente}! He aceptado tu pedido y voy en camino a recogerlo.`
+  });
   showToast(`Pedido de ${order.cliente} aceptado`);
-  
-  subscribeToChat(order.id);
 }
 
 async function drawOsrmLeg(layer, from, to, style, fallbackStyle) {
@@ -3517,6 +3954,80 @@ async function drawActiveRoute() {
   mensajeroMap.fitBounds(activeRouteLayer.getBounds(), { padding: [30, 30] });
 }
 
+// -------- Mapa dedicado del repartidor (pestaña "Mapa") --------
+function ensureMapaMensajeroFull() {
+  if (mapaMensajeroFull) return;
+  mapaMensajeroFull = L.map('mapaMensajeroFull', {
+    zoomControl: false,
+    fadeAnimation: true,
+    zoomAnimation: true,
+    markerZoomAnimation: true,
+    preferCanvas: true
+  }).setView([23.1136, -82.3666], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    detectRetina: true,
+    keepBuffer: 4,
+    updateWhenIdle: false,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(mapaMensajeroFull);
+}
+
+async function renderMapaMensajeroFull() {
+  ensureMapaMensajeroFull();
+  setTimeout(() => mapaMensajeroFull.invalidateSize(), 60);
+
+  const empty = document.getElementById('mapaMensajeroFullEmpty');
+  const overlay = document.getElementById('mapaMensajeroFullOverlay');
+
+  if (!activeDelivery) {
+    empty.style.display = 'flex';
+    overlay.style.display = 'none';
+    if (mapaMensajeroFullRouteLayer) { mapaMensajeroFull.removeLayer(mapaMensajeroFullRouteLayer); mapaMensajeroFullRouteLayer = null; }
+    if (mapaMensajeroFullMarker) { mapaMensajeroFull.removeLayer(mapaMensajeroFullMarker); mapaMensajeroFullMarker = null; }
+    return;
+  }
+
+  empty.style.display = 'none';
+  overlay.style.display = '';
+
+  const o = activeDelivery;
+  const target = o.status === 'recogida' ? o.pickup : o.dropoff;
+  const from = mensajeroPos || target;
+
+  document.getElementById('mapaMensajeroFullStatus').textContent = o.status === 'recogida' ? '📦 Hacia recogida' : '🏁 Hacia entrega';
+  document.getElementById('mapaMensajeroFullClient').textContent = o.cliente;
+  document.getElementById('mapaMensajeroFullAddr').textContent = o.status === 'recogida'
+    ? (o.origenTexto || 'Punto de recogida')
+    : (o.destinoTexto || 'Punto de entrega');
+
+  if (mapaMensajeroFullRouteLayer) mapaMensajeroFull.removeLayer(mapaMensajeroFullRouteLayer);
+  mapaMensajeroFullRouteLayer = L.featureGroup().addTo(mapaMensajeroFull);
+  const myId = ++_fullRouteCalcId;
+
+  L.marker(o.pickup, { icon: pickupIconFull }).bindPopup('Punto de recogida').addTo(mapaMensajeroFullRouteLayer);
+  L.marker(o.dropoff, { icon: dropIconFull }).bindPopup('Punto de entrega').addTo(mapaMensajeroFullRouteLayer);
+
+  await drawOsrmLeg(
+    mapaMensajeroFullRouteLayer, from, target,
+    { color: '#ffffff', weight: 5, opacity: 1 },
+    { color: '#ffffff', weight: 5, opacity: 1, dashArray: '2 8' }
+  );
+  if (myId !== _fullRouteCalcId) return;
+
+  updateMapaMensajeroFullPosition();
+  mapaMensajeroFull.fitBounds(mapaMensajeroFullRouteLayer.getBounds(), { padding: [30, 30] });
+}
+
+function updateMapaMensajeroFullPosition() {
+  if (!mapaMensajeroFull || !mensajeroPos) return;
+  if (!mapaMensajeroFullMarker) {
+    mapaMensajeroFullMarker = L.marker(mensajeroPos, { icon: buildMensajeroIcon(), zIndexOffset: 1000 }).addTo(mapaMensajeroFull);
+  } else {
+    mapaMensajeroFullMarker.setLatLng(mensajeroPos);
+  }
+}
+
 function renderActiveDelivery() {
   const box = document.getElementById('activeDeliveryBox');
   const o = activeDelivery;
@@ -3529,11 +4040,17 @@ function renderActiveDelivery() {
         <div class="ac-meta">${o.pack.icon} ${o.pack.label} · ${o.weight} kg · ${o.km.toFixed(1)} km de viaje<br>Pago estimado: <b>$${o.costo.total.toFixed(2)}</b></div>
         <button class="cta" id="btnLlegueRecogida">Llegué a la recogida</button>
       </div>`;
-    document.getElementById('btnLlegueRecogida').addEventListener('click', () => {
+    document.getElementById('btnLlegueRecogida').addEventListener('click', async () => {
       activeDelivery.status = 'entrega';
       renderActiveDelivery();
-      addMessage('Ya recogí el paquete, voy hacia el destino.', 'me');
+      drawActiveRoute();
+      renderMapaMensajeroFull();
       showToast('Pedido recogido, en camino a la entrega');
+
+      if (o.id) {
+        const { error } = await _supabase.from('pedidos').update({ estado: 'recogido' }).eq('id', o.id);
+        if (error) console.error('Error al marcar como recogido:', error);
+      }
     });
   } else if (o.status === 'entrega') {
     box.innerHTML = `
@@ -3544,7 +4061,6 @@ function renderActiveDelivery() {
       </div>`;
     document.getElementById('btnEntregado').addEventListener('click', async () => {
       showToast(`¡Entrega completada! Ganaste $${o.costo.total.toFixed(2)}`);
-      addMessage('Tu pedido fue entregado. ¡Gracias!', 'me');
 
       if (o.id) {
         _supabase.from('pedidos').update({ estado: 'completado' }).eq('id', o.id)
@@ -3560,8 +4076,13 @@ function renderActiveDelivery() {
       document.querySelectorAll('#mensajeroVehicleOptions .size-card').forEach(c => c.style.pointerEvents = '');
       if (activeRouteLayer) { mensajeroMap.removeLayer(activeRouteLayer); activeRouteLayer = null; }
       if (mensajeroPos && document.getElementById('availToggle').checked) generateMensajeroOrders(mensajeroPos);
+      renderMapaMensajeroFull();
 
-      document.querySelector('.chat-who .role').innerHTML = '● Sin pedido activo';
+      actualizarContactoWhatsApp('Mensajero', {
+        avatar: '··', nombre: 'Esperando pedido...', role: '● Sin pedido activo', telefono: null,
+        tituloVacio: 'Aún no tienes un pedido activo',
+        subVacio: 'En cuanto aceptes un pedido, aquí podrás escribirle al cliente directo por WhatsApp.'
+      });
     });
   }
 }
