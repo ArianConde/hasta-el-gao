@@ -735,6 +735,12 @@ const AuthService = {
   .role-card .rc-emoji{ font-size:2.2rem; flex-shrink:0; }
   .role-card .rc-title{ font-family:'Sora'; font-weight:800; font-size:0.96rem; margin-bottom:3px; color:var(--white);}
   .role-card .rc-desc{ font-size:0.72rem; color:var(--muted); line-height:1.5; }
+  .role-card.selected{
+    border-color: var(--kiwi);
+    background: linear-gradient(180deg,rgba(137,233,0,0.14),rgba(137,233,0,0.06));
+    box-shadow: var(--shadow-md), var(--shine-top), 0 0 0 1px var(--kiwi-glow);
+  }
+  .role-card.selected .rc-title{ color:var(--kiwi); }
 
   /* -------- ROLE BAR -------- */
   .role-bar{
@@ -882,6 +888,15 @@ const AuthService = {
     border:1px solid var(--glass-edge);
     backdrop-filter:var(--blur-sm);
     box-shadow: var(--shadow-xs), var(--shine-top);
+  }
+  .order-card.route-active{
+    border-color: var(--kiwi);
+    box-shadow: var(--shadow-md), var(--shine-top), 0 0 0 1px var(--kiwi-glow);
+  }
+  .order-card.route-active .oc-btn.ghost{
+    background: linear-gradient(180deg,rgba(137,233,0,0.18),rgba(137,233,0,0.08));
+    border-color: var(--kiwi);
+    color: var(--kiwi-light);
   }
 
   /* -------- ACTIVE DELIVERY CARD (mensajero) -------- */
@@ -1791,6 +1806,8 @@ let _activeRouteCalcId = 0;
 let mensajeroPos = null;
 let mensajeroVehiculo = 'moto';
 let mensajeroOrders = [];
+let orderLayersMap = {};
+let selectedOrderId = null;
 let activeDelivery = null;
 let deliveryHistory = [];
 let histFilterPeriod = 'all';
@@ -2014,6 +2031,9 @@ authSubmitBtn.addEventListener('click', async () => {
 
 document.querySelectorAll('.role-card').forEach(card => {
   card.addEventListener('click', async () => {
+    document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+
     const { data: { user } } = await _supabase.auth.getUser();
     if (user) {
       const role = card.dataset.role;
@@ -3270,9 +3290,43 @@ async function generateMensajeroOrders(center) {
   renderMensajeroOrders(center);
 }
 
+// -------- Estilos de ruta: normal / atenuada / resaltada --------
+const ROUTE_STYLE_DEFAULT   = { color:'#89e900', weight:3,  opacity:0.55, dashArray:'2 8' };
+const ROUTE_FALLBACK_DEFAULT= { color:'rgba(137,233,0,0.5)', weight:2, dashArray:'4 6', opacity:0.55 };
+const ROUTE_STYLE_DIMMED    = { color:'#89e900', weight:2,  opacity:0.15, dashArray:'2 8' };
+const ROUTE_STYLE_SELECTED  = { color:'#ffffff', weight:5,  opacity:1,    dashArray:null };
+const ROUTE_GLOW_SELECTED   = { color:'#a0f020', weight:13, opacity:0.4,  dashArray:null };
+
+function applyOrderHighlightState(id) {
+  const entry = orderLayersMap[id];
+  if (!entry) return;
+  const isSelected = selectedOrderId === id;
+  const isDimmed = !!selectedOrderId && !isSelected;
+
+  if (entry.routeLine) {
+    entry.routeLine.setStyle(isSelected ? ROUTE_STYLE_SELECTED : (isDimmed ? ROUTE_STYLE_DIMMED : ROUTE_STYLE_DEFAULT));
+    if (isSelected) entry.routeLine.bringToFront();
+  }
+  if (entry.glowLine) {
+    entry.glowLine.setStyle({ opacity: isSelected ? ROUTE_GLOW_SELECTED.opacity : 0 });
+    if (isSelected) entry.glowLine.bringToFront();
+  }
+  if (entry.pickupMarker) entry.pickupMarker.setOpacity(isDimmed ? 0.3 : 1);
+  if (entry.dropMarker) entry.dropMarker.setOpacity(isDimmed ? 0.3 : 1);
+
+  const card = document.querySelector(`.order-card[data-id="${id}"]`);
+  if (card) card.classList.toggle('route-active', isSelected);
+}
+
+function highlightOrderRoute(id) {
+  selectedOrderId = (selectedOrderId === id) ? null : id;
+  Object.keys(orderLayersMap).forEach(applyOrderHighlightState);
+}
+
 function renderMensajeroOrders(center) {
   // Limpiar capas anteriores
   mensajeroLayer.clearLayers();
+  orderLayersMap = {};
   if (mensajeroRangeCircle) mensajeroMap.removeLayer(mensajeroRangeCircle);
   
   // Dibujar círculo de rango
@@ -3296,17 +3350,33 @@ function renderMensajeroOrders(center) {
       '<div class="empty-result">No hay pedidos disponibles cerca de tu ubicación.</div>';
   } else {
     mensajeroOrders.forEach(o => {
-      L.marker(o.pickup, { icon: pickupIcon })
+      const group = L.featureGroup().addTo(mensajeroLayer);
+
+      const pickupMarker = L.marker(o.pickup, { icon: pickupIcon })
         .bindPopup(`Recogida de <b>${o.cliente}</b>${o.telefonoCliente ? '<br>📞 ' + o.telefonoCliente : ''}<br>${o.pack.label} · ${o.weight} kg<br>Pago: $${o.costo.total.toFixed(2)}`)
-        .addTo(mensajeroLayer);
-      L.marker(o.dropoff, { icon: dropIcon })
+        .addTo(group);
+      const dropMarker = L.marker(o.dropoff, { icon: dropIcon })
         .bindPopup(`Entrega${o.destinoTexto ? '<br>' + o.destinoTexto : ''}`)
-        .addTo(mensajeroLayer);
+        .addTo(group);
+
+      orderLayersMap[o.id] = { group, pickupMarker, dropMarker, glowLine: null, routeLine: null };
+
       // Ruta real de recogida -> entrega, visible desde ya, antes de aceptar
-      drawOsrmLeg(mensajeroLayer, o.pickup, o.dropoff,
-        { color: '#89e900', weight: 3, opacity: 0.6, dashArray: '2 8' },
-        { color: 'rgba(137,233,0,0.5)', weight: 2, dashArray: '4 6', opacity: 0.6 });
+      drawOsrmLeg(group, o.pickup, o.dropoff, ROUTE_STYLE_DEFAULT, ROUTE_FALLBACK_DEFAULT)
+        .then(line => {
+          const entry = orderLayersMap[o.id];
+          if (!entry) return; // el pedido ya no existe (la lista se refrescó)
+          entry.routeLine = line;
+          entry.glowLine = L.polyline(line.getLatLngs(), { ...ROUTE_GLOW_SELECTED, opacity: 0 }).addTo(group);
+          entry.glowLine.bringToBack();
+          applyOrderHighlightState(o.id);
+        });
     });
+
+    // Si había un pedido con la ruta resaltada y sigue disponible, mantener el resaltado
+    if (selectedOrderId && !mensajeroOrders.some(o => o.id === selectedOrderId)) {
+      selectedOrderId = null;
+    }
   }
 
   renderOrdersList();
@@ -3321,7 +3391,7 @@ function renderOrdersList() {
   list.innerHTML = mensajeroOrders.map(o => {
     const distTxt = (o.distPickup * 1000) < 1000 ? `${(o.distPickup * 1000).toFixed(0)} m` : `${o.distPickup.toFixed(1)} km`;
     return `
-    <div class="order-card">
+    <div class="order-card" data-id="${o.id}">
       <div class="oc-top">
         <span class="oc-client">${o.cliente}${o.telefonoCliente ? ' · ' + o.telefonoCliente : ''}</span>
         <span class="oc-pay">$${o.costo.total.toFixed(2)}</span>
@@ -3350,6 +3420,7 @@ function renderOrdersList() {
       const order = mensajeroOrders.find(o => o.id === btn.dataset.id);
       if (!order) return;
       if (btn.dataset.action === 'ver') {
+        highlightOrderRoute(order.id);
         mensajeroMap.fitBounds(L.latLngBounds([mensajeroPos, order.pickup, order.dropoff]), { padding: [30, 30] });
       } else {
         aceptarPedido(order);
@@ -3409,12 +3480,11 @@ async function drawOsrmLeg(layer, from, to, style, fallbackStyle) {
     if (data.routes && data.routes.length) {
       const best = data.routes.reduce((a, b) => (a.duration <= b.duration ? a : b));
       const coords = best.geometry.coordinates.map(c => [c[1], c[0]]);
-      L.polyline(coords, style).addTo(layer);
-      return;
+      return L.polyline(coords, style).addTo(layer);
     }
     throw new Error('sin ruta');
   } catch (e) {
-    L.polyline([from, to], fallbackStyle).addTo(layer);
+    return L.polyline([from, to], fallbackStyle).addTo(layer);
   }
 }
 
