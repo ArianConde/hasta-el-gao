@@ -2074,7 +2074,7 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
               trackAssignedCourier(mensajero.id, mensajero.vehiculo || 'moto');
             }
           });
-      } else if (updatedPedido.estado === 'recogido') {
+      } else if (updatedPedido.estado === 'recogida') {
         showToast('📦 Tu repartidor recogió el paquete, va en camino a la entrega');
         btn.textContent = 'PEDIDO RECOGIDO · EN CAMINO';
       } else if (updatedPedido.estado === 'completado') {
@@ -2265,7 +2265,7 @@ let mapClienteMensajerosChannel = null;
 const ESTADO_LABEL = {
   buscando:  { text: 'Buscando repartidor', color: '#f0b429' },
   aceptado:  { text: 'Repartidor en camino a recogida', color: '#89e900' },
-  recogido:  { text: 'En camino a la entrega', color: '#89e900' },
+  recogida:  { text: 'En camino a la entrega', color: '#89e900' },
   completado:{ text: 'Entregado', color: '#7a7a7a' }
 };
 
@@ -2290,7 +2290,7 @@ async function loadClienteActiveOrders(){
     .from('pedidos')
     .select('*, mensajeros(nombre, vehiculo, lat, lng, telefono)')
     .eq('cliente_id', user.id)
-    .in('estado', ['buscando', 'aceptado', 'recogido'])
+    .in('estado', ['buscando', 'aceptado', 'recogida'])
     .order('created_at', { ascending: false });
 
   if (error) { console.error('Error cargando pedidos activos:', error); return; }
@@ -3304,7 +3304,7 @@ function renderActiveDelivery(){
 
       // Registra el cambio de etapa para que el cliente lo vea en tiempo real
       if (o.id) {
-        const { error } = await _supabase.from('pedidos').update({ estado: 'recogido' }).eq('id', o.id);
+        const { error } = await _supabase.from('pedidos').update({ estado: 'recogida' }).eq('id', o.id);
         if (error) console.error('Error al marcar recogido:', error);
       }
     });
