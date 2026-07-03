@@ -1119,9 +1119,7 @@ function shareLocation(messengerId, lat, lng) {
   font-family:'Sora'; font-weight:800; font-size:0.92rem; color:var(--kiwi);
   white-space:nowrap;
 }
-.hist-card-meta{
-  font-size:0.72rem; color:var(--muted); margin-bottom:4px; line-height:1.4;
-}
+.hist-card-meta{    }
 .hist-card-date{
   font-size:0.66rem; color:rgba(255,255,255,0.32); font-weight:600;
 }
@@ -2074,7 +2072,7 @@ document.getElementById('btnSolicitar').addEventListener('click', async () => {
               trackAssignedCourier(mensajero.id, mensajero.vehiculo || 'moto');
             }
           });
-      } else if (updatedPedido.estado === 'recogida') {
+      } else if (updatedPedido.estado === 'recogido') {
         showToast('📦 Tu repartidor recogió el paquete, va en camino a la entrega');
         btn.textContent = 'PEDIDO RECOGIDO · EN CAMINO';
       } else if (updatedPedido.estado === 'completado') {
@@ -2265,7 +2263,7 @@ let mapClienteMensajerosChannel = null;
 const ESTADO_LABEL = {
   buscando:  { text: 'Buscando repartidor', color: '#f0b429' },
   aceptado:  { text: 'Repartidor en camino a recogida', color: '#89e900' },
-  recogida:  { text: 'En camino a la entrega', color: '#89e900' },
+  recogido:  { text: 'En camino a la entrega', color: '#89e900' },
   completado:{ text: 'Entregado', color: '#7a7a7a' }
 };
 
@@ -2290,7 +2288,7 @@ async function loadClienteActiveOrders(){
     .from('pedidos')
     .select('*, mensajeros(nombre, vehiculo, lat, lng, telefono)')
     .eq('cliente_id', user.id)
-    .in('estado', ['buscando', 'aceptado', 'recogida'])
+    .in('estado', ['buscando', 'aceptado', 'recogido'])
     .order('created_at', { ascending: false });
 
   if (error) { console.error('Error cargando pedidos activos:', error); return; }
@@ -3064,11 +3062,11 @@ async function generateMensajeroOrders(center){
     
     data.forEach(o => {
       const pickup = { lat: o.origen_lat, lng: o.origen_lng };
-      const distPickup = map.distance(center, pickup) / 1000;
+      const distPickup = mensajeroMap.distance(center, pickup) / 1000;
       
       if (distPickup <= RANGO_KM) {
         const dropoff = { lat: o.destino_lat, lng: o.destino_lng };
-        const km = o.distancia_km || (map.distance(pickup, dropoff) / 1000 * 1.3);
+        const km = o.distancia_km || (mensajeroMap.distance(pickup, dropoff) / 1000 * 1.3);
         const pack = PAQUETES.find(p => p.label === o.paquete_tamano) || PAQUETES[0];
         const costo = calcularCosto(mensajeroVehiculo, km, pack.extra, o.peso_kg);
         
@@ -3304,7 +3302,7 @@ function renderActiveDelivery(){
 
       // Registra el cambio de etapa para que el cliente lo vea en tiempo real
       if (o.id) {
-        const { error } = await _supabase.from('pedidos').update({ estado: 'recogida' }).eq('id', o.id);
+        const { error } = await _supabase.from('pedidos').update({ estado: 'recogido' }).eq('id', o.id);
         if (error) console.error('Error al marcar recogido:', error);
       }
     });
