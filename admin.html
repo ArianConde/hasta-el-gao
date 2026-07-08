@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hasta el Gao · Panel interno</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --night: #16171a; --night2:#1e2024; --night3:#26282e;
+    --kiwi:#89e900; --kiwi-dim:rgba(137,233,0,0.13);
+    --edge: rgba(255,255,255,0.08);
+    --muted: rgba(255,255,255,0.55);
+    --red: #ff5c5c; --amber:#f0b429;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:'Inter',sans-serif; background:var(--night); color:#fff;
+    min-height:100vh;
+  }
+  h1,h2,h3{font-family:'Sora',sans-serif; margin:0;}
+  /* ---------- LOGIN GATE ---------- */
+  #gate{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  #gate .box{
+    background:var(--night2); border:1px solid var(--edge); border-radius:20px;
+    padding:32px; width:100%; max-width:360px;
+  }
+  #gate h1{ font-size:1.2rem; margin-bottom:4px; }
+  #gate p{ color:var(--muted); font-size:0.82rem; margin-bottom:20px; }
+  #gate label{ font-size:0.75rem; color:var(--muted); display:block; margin-bottom:6px; }
+  #gate input{
+    width:100%; padding:11px 13px; border-radius:10px; border:1px solid var(--edge);
+    background:var(--night3); color:#fff; font-size:0.9rem; margin-bottom:14px;
+  }
+  #gate button{
+    width:100%; padding:12px; border:none; border-radius:10px; background:var(--kiwi);
+    color:#111; font-weight:700; font-size:0.88rem; cursor:pointer;
+  }
+  #gate .err{ color:var(--red); font-size:0.8rem; margin-top:10px; min-height:1em; }
+
+  /* ---------- DASHBOARD ---------- */
+  #dash{ display:none; }
+  header.top{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 24px; border-bottom:1px solid var(--edge); position:sticky; top:0;
+    background:var(--night); z-index:10;
+  }
+  header.top h1{ font-size:1.05rem; }
+  header.top h1 span{ color:var(--kiwi); }
+  #btnSalir{ background:none; border:1px solid var(--edge); color:var(--muted); padding:8px 14px; border-radius:8px; cursor:pointer; font-size:0.8rem;}
+
+  main{ max-width:1200px; margin:0 auto; padding:24px; }
+
+  .stats-row{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:28px; }
+  .stat-card{ background:var(--night2); border:1px solid var(--edge); border-radius:14px; padding:16px; }
+  .stat-card .val{ font-family:'Sora'; font-size:1.5rem; font-weight:800; color:var(--kiwi); }
+  .stat-card .lbl{ font-size:0.75rem; color:var(--muted); margin-top:4px; }
+
+  .tabs{ display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
+  .tab-btn{
+    background:var(--night2); border:1px solid var(--edge); color:var(--muted);
+    padding:9px 16px; border-radius:9px; cursor:pointer; font-size:0.82rem; font-weight:600;
+  }
+  .tab-btn.active{ background:var(--kiwi-dim); border-color:var(--kiwi); color:var(--kiwi); }
+
+  .panel{ display:none; }
+  .panel.active{ display:block; }
+
+  table{ width:100%; border-collapse:collapse; background:var(--night2); border-radius:14px; overflow:hidden; }
+  th,td{ padding:10px 12px; text-align:left; font-size:0.8rem; border-bottom:1px solid var(--edge); }
+  th{ color:var(--muted); font-weight:600; text-transform:uppercase; font-size:0.68rem; letter-spacing:0.04em; }
+  tr:last-child td{ border-bottom:none; }
+  .pill{ padding:3px 9px; border-radius:20px; font-size:0.7rem; font-weight:700; display:inline-block; }
+  .pill.buscando{ background:rgba(240,180,41,0.15); color:var(--amber); }
+  .pill.aceptado,.pill.recogido{ background:var(--kiwi-dim); color:var(--kiwi); }
+  .pill.completado{ background:rgba(255,255,255,0.08); color:var(--muted); }
+  .pill.cancelado{ background:rgba(255,92,92,0.15); color:var(--red); }
+  .row-actions{ display:flex; gap:6px; }
+  .row-actions button{
+    background:var(--night3); border:1px solid var(--edge); color:#fff; padding:5px 10px;
+    border-radius:7px; font-size:0.72rem; cursor:pointer;
+  }
+  .row-actions button.danger{ color:var(--red); border-color:rgba(255,92,92,0.3); }
+  .filter-row{ display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .filter-row select, .filter-row input{
+    background:var(--night2); border:1px solid var(--edge); color:#fff; padding:8px 10px;
+    border-radius:8px; font-size:0.8rem;
+  }
+  .empty{ color:var(--muted); font-size:0.85rem; padding:20px; text-align:center; }
+  .tarifa-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+  .tarifa-card{ background:var(--night2); border:1px solid var(--edge); border-radius:14px; padding:16px; }
+  .tarifa-card h3{ font-size:0.9rem; margin-bottom:10px; }
+  .tarifa-card label{ font-size:0.72rem; color:var(--muted); display:block; margin:8px 0 3px; }
+  .tarifa-card input{ width:100%; background:var(--night3); border:1px solid var(--edge); color:#fff; padding:7px 9px; border-radius:7px; font-size:0.82rem; }
+  .tarifa-card button{ margin-top:10px; background:var(--kiwi); color:#111; border:none; padding:8px 14px; border-radius:8px; font-weight:700; font-size:0.78rem; cursor:pointer; }
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--night3); border:1px solid var(--edge); padding:10px 18px; border-radius:10px;
+    font-size:0.82rem; opacity:0; pointer-events:none; transition:.25s;
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN GATE ===================== -->
+<div id="gate">
+  <div class="box">
+    <h1>🔒 Hasta el Gao · Panel interno</h1>
+    <p>Acceso restringido. Esta página no está enlazada públicamente y solo funciona con una cuenta de administrador autorizada.</p>
+    <label>Correo</label>
+    <input type="email" id="gateEmail" autocomplete="username" placeholder="admin@tudominio.com">
+    <label>Contraseña</label>
+    <input type="password" id="gatePass" autocomplete="current-password" placeholder="••••••••">
+    <button id="gateBtn">Entrar</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+</div>
+
+<!-- ===================== DASHBOARD ===================== -->
+<div id="dash">
+  <header class="top">
+    <h1>Hasta el <span>Gao</span> · Panel interno</h1>
+    <button id="btnSalir">Cerrar sesión</button>
+  </header>
+
+  <main>
+    <div class="stats-row">
+      <div class="stat-card"><div class="val" id="statPedidosHoy">—</div><div class="lbl">Pedidos hoy</div></div>
+      <div class="stat-card"><div class="val" id="statIngresosHoy">—</div><div class="lbl">Ingresos hoy</div></div>
+      <div class="stat-card"><div class="val" id="statActivos">—</div><div class="lbl">Pedidos en curso</div></div>
+      <div class="stat-card"><div class="val" id="statMensajerosDisp">—</div><div class="lbl">Mensajeros disponibles</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-panel="p-pedidos">📦 Pedidos</button>
+      <button class="tab-btn" data-panel="p-mensajeros">🛵 Mensajeros</button>
+      <button class="tab-btn" data-panel="p-clientes">👤 Clientes</button>
+      <button class="tab-btn" data-panel="p-tarifas">💰 Tarifas</button>
+    </div>
+
+    <!-- PEDIDOS -->
+    <div class="panel active" id="p-pedidos">
+      <div class="filter-row">
+        <select id="filtroEstado">
+          <option value="">Todos los estados</option>
+          <option value="buscando">Buscando</option>
+          <option value="aceptado">Aceptado</option>
+          <option value="recogido">Recogido</option>
+          <option value="completado">Completado</option>
+          <option value="cancelado">Cancelado</option>
+        </select>
+        <button class="tab-btn" id="btnRefrescarPedidos">↻ Refrescar</button>
+      </div>
+      <table>
+        <thead><tr><th>Fecha</th><th>Cliente</th><th>Mensajero</th><th>Ruta</th><th>Costo</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaPedidos"></tbody>
+      </table>
+    </div>
+
+    <!-- MENSAJEROS -->
+    <div class="panel" id="p-mensajeros">
+      <table>
+        <thead><tr><th>Nombre</th><th>Teléfono</th><th>Vehículo</th><th>Disponible</th><th>Calificación</th><th>Estado cuenta</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaMensajeros"></tbody>
+      </table>
+    </div>
+
+    <!-- CLIENTES -->
+    <div class="panel" id="p-clientes">
+      <table>
+        <thead><tr><th>Nombre</th><th>Teléfono</th><th>Pedidos</th><th>Estado cuenta</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaClientes"></tbody>
+      </table>
+    </div>
+
+    <!-- TARIFAS -->
+    <div class="panel" id="p-tarifas">
+      <div class="tarifa-grid" id="tarifaGrid"></div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===================== CONFIG SUPABASE ===================== */
+const SUPABASE_URL = 'https://undlrtxahworhpgjnfek.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVuZGxydHhhaHdvcmhwZ2puZmVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MjQwMDcsImV4cCI6MjA5ODQwMDAwN30.FnRkXN39qppLPtWDamcyf5tNgFf1020I8DFF2SVECW4';
+const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const VEHICLES = { bicicleta:{icon:'🚲',label:'Bicicleta'}, moto:{icon:'🏍️',label:'Moto'}, triciclo:{icon:'🛺',label:'Triciclo'} };
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* ===================== LOGIN GATE ===================== */
+// El acceso NO depende solo de tener correo/contraseña válidos: además
+// de iniciar sesión en Supabase Auth, se verifica contra la tabla
+// "admins" (protegida por RLS) que ese usuario es, en efecto, un
+// administrador autorizado. Ver supabase_setup.sql, sección 6.
+document.getElementById('gateBtn').addEventListener('click', hacerLogin);
+document.getElementById('gatePass').addEventListener('keydown', e => { if (e.key === 'Enter') hacerLogin(); });
+
+async function hacerLogin(){
+  const email = document.getElementById('gateEmail').value.trim();
+  const pass  = document.getElementById('gatePass').value;
+  const errEl = document.getElementById('gateErr');
+  errEl.textContent = '';
+
+  if (!email || !pass) { errEl.textContent = 'Completa correo y contraseña.'; return; }
+
+  const { data, error } = await _supabase.auth.signInWithPassword({ email, password: pass });
+  if (error) { errEl.textContent = 'Credenciales incorrectas.'; return; }
+
+  const ok = await verificarEsAdmin();
+  if (!ok) {
+    await _supabase.auth.signOut();
+    errEl.textContent = 'Esta cuenta no tiene permisos de administrador.';
+    return;
+  }
+  mostrarDashboard();
+}
+
+async function verificarEsAdmin(){
+  const { data: { user } } = await _supabase.auth.getUser();
+  if (!user) return false;
+  const { data, error } = await _supabase.from('admins').select('user_id').eq('user_id', user.id).maybeSingle();
+  return !error && !!data;
+}
+
+document.getElementById('btnSalir').addEventListener('click', async () => {
+  await _supabase.auth.signOut();
+  location.reload();
+});
+
+function mostrarDashboard(){
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('dash').style.display = 'block';
+  cargarTodo();
+}
+
+// Si ya había una sesión de admin activa (recarga de página), se
+// re-verifica el rol antes de mostrar nada.
+(async function initGate(){
+  const { data: { user } } = await _supabase.auth.getUser();
+  if (user && await verificarEsAdmin()) mostrarDashboard();
+})();
+
+/* ===================== TABS ===================== */
+document.querySelectorAll('.tab-btn[data-panel]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn[data-panel]').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.panel).classList.add('active');
+  });
+});
+
+/* ===================== CARGA GENERAL ===================== */
+async function cargarTodo(){
+  await Promise.all([cargarStats(), cargarPedidos(), cargarMensajeros(), cargarClientes(), cargarTarifas()]);
+}
+
+async function cargarStats(){
+  const hoyInicio = new Date(); hoyInicio.setHours(0,0,0,0);
+
+  const { data: pedidosHoy } = await _supabase.from('pedidos').select('costo_total, estado').gte('created_at', hoyInicio.toISOString());
+  const { data: activos }    = await _supabase.from('pedidos').select('id').in('estado', ['buscando','aceptado','recogido']);
+  const { data: dispMens }   = await _supabase.from('mensajeros').select('id').eq('disponible', true);
+
+  document.getElementById('statPedidosHoy').textContent = pedidosHoy ? pedidosHoy.length : '—';
+  const ingresos = (pedidosHoy || []).filter(p => p.estado === 'completado').reduce((s,p) => s + (p.costo_total||0), 0);
+  document.getElementById('statIngresosHoy').textContent = '$' + ingresos.toFixed(2);
+  document.getElementById('statActivos').textContent = activos ? activos.length : '—';
+  document.getElementById('statMensajerosDisp').textContent = dispMens ? dispMens.length : '—';
+}
+
+/* ===================== PEDIDOS ===================== */
+async function cargarPedidos(){
+  const filtro = document.getElementById('filtroEstado').value;
+  let q = _supabase.from('pedidos')
+    .select('*, clientes(nombre,telefono), mensajeros(nombre,telefono,vehiculo)')
+    .order('created_at', { ascending:false }).limit(150);
+  if (filtro) q = q.eq('estado', filtro);
+  const { data, error } = await q;
+  const tbody = document.getElementById('tablaPedidos');
+  if (error) { tbody.innerHTML = `<tr><td colspan="7" class="empty">Error: ${error.message}</td></tr>`; return; }
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty">Sin pedidos con este filtro.</td></tr>`; return; }
+
+  tbody.innerHTML = data.map(p => {
+    const fecha = new Date(p.created_at).toLocaleString('es-ES', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    const cliente = p.clientes?.nombre || '—';
+    const mens = p.mensajeros ? `${VEHICLES[p.mensajeros.vehiculo]?.icon||'🛵'} ${p.mensajeros.nombre}` : '—';
+    const puedeCancelar = ['buscando','aceptado','recogido'].includes(p.estado);
+    return `
+    <tr>
+      <td>${fecha}</td>
+      <td>${cliente}</td>
+      <td>${mens}</td>
+      <td style="max-width:220px;">${(p.origen_texto||'').slice(0,26)} → ${(p.destino_texto||'').slice(0,26)}</td>
+      <td>$${(p.costo_total||0).toFixed(2)}</td>
+      <td><span class="pill ${p.estado}">${p.estado}</span></td>
+      <td class="row-actions">
+        ${puedeCancelar ? `<button class="danger" onclick="cancelarPedidoAdmin('${p.id}')">Cancelar</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function cancelarPedidoAdmin(id){
+  if (!confirm('¿Cancelar este pedido como administrador?')) return;
+  const { error } = await _supabase.from('pedidos').update({ estado:'cancelado', cancelado_por:'admin' }).eq('id', id);
+  if (error) { showToast('❌ ' + error.message); return; }
+  showToast('Pedido cancelado');
+  cargarPedidos(); cargarStats();
+}
+
+document.getElementById('filtroEstado').addEventListener('change', cargarPedidos);
+document.getElementById('btnRefrescarPedidos').addEventListener('click', () => { cargarPedidos(); cargarStats(); });
+
+/* ===================== MENSAJEROS ===================== */
+async function cargarMensajeros(){
+  const { data, error } = await _supabase.from('mensajeros').select('*').order('nombre');
+  const tbody = document.getElementById('tablaMensajeros');
+  if (error) { tbody.innerHTML = `<tr><td colspan="7" class="empty">Error: ${error.message}</td></tr>`; return; }
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty">Sin mensajeros registrados.</td></tr>`; return; }
+
+  const ids = data.map(m => m.id);
+  const { data: califs } = await _supabase.from('calificaciones').select('mensajero_id, calificacion').in('mensajero_id', ids);
+  const promedios = {};
+  (califs || []).forEach(c => {
+    if (!promedios[c.mensajero_id]) promedios[c.mensajero_id] = [];
+    promedios[c.mensajero_id].push(c.calificacion);
+  });
+
+  tbody.innerHTML = data.map(m => {
+    const arr = promedios[m.id];
+    const prom = arr ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(1) : '—';
+    return `
+    <tr>
+      <td>${m.nombre || '—'}</td>
+      <td>${m.telefono || '—'}</td>
+      <td>${VEHICLES[m.vehiculo]?.icon||''} ${VEHICLES[m.vehiculo]?.label||m.vehiculo||'—'}</td>
+      <td>${m.disponible ? '🟢 Sí' : '⚪ No'}</td>
+      <td>⭐ ${prom}</td>
+      <td>${m.bloqueado ? '<span class="pill cancelado">Bloqueado</span>' : '<span class="pill aceptado">Activo</span>'}</td>
+      <td class="row-actions">
+        <button class="${m.bloqueado ? '' : 'danger'}" onclick="toggleBloqueo('mensajeros','${m.id}',${!m.bloqueado})">
+          ${m.bloqueado ? 'Desbloquear' : 'Bloquear'}
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+/* ===================== CLIENTES ===================== */
+async function cargarClientes(){
+  const { data, error } = await _supabase.from('clientes').select('*').order('nombre');
+  const tbody = document.getElementById('tablaClientes');
+  if (error) { tbody.innerHTML = `<tr><td colspan="5" class="empty">Error: ${error.message}</td></tr>`; return; }
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="5" class="empty">Sin clientes registrados.</td></tr>`; return; }
+
+  const ids = data.map(c => c.id);
+  const { data: pedidosCli } = await _supabase.from('pedidos').select('cliente_id').in('cliente_id', ids);
+  const conteo = {};
+  (pedidosCli || []).forEach(p => { conteo[p.cliente_id] = (conteo[p.cliente_id]||0) + 1; });
+
+  tbody.innerHTML = data.map(c => `
+    <tr>
+      <td>${c.nombre || '—'}</td>
+      <td>${c.telefono || '—'}</td>
+      <td>${conteo[c.id] || 0}</td>
+      <td>${c.bloqueado ? '<span class="pill cancelado">Bloqueado</span>' : '<span class="pill aceptado">Activo</span>'}</td>
+      <td class="row-actions">
+        <button class="${c.bloqueado ? '' : 'danger'}" onclick="toggleBloqueo('clientes','${c.id}',${!c.bloqueado})">
+          ${c.bloqueado ? 'Desbloquear' : 'Bloquear'}
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+async function toggleBloqueo(tabla, id, nuevoValor){
+  const { error } = await _supabase.from(tabla).update({ bloqueado: nuevoValor }).eq('id', id);
+  if (error) { showToast('❌ ' + error.message); return; }
+  showToast(nuevoValor ? 'Cuenta bloqueada' : 'Cuenta desbloqueada');
+  if (tabla === 'mensajeros') cargarMensajeros(); else cargarClientes();
+}
+
+/* ===================== TARIFAS ===================== */
+async function cargarTarifas(){
+  const { data: tarifas }  = await _supabase.from('tarifas').select('*').order('vehiculo');
+  const { data: config }   = await _supabase.from('config_general').select('*');
+  const grid = document.getElementById('tarifaGrid');
+  grid.innerHTML = '';
+
+  (tarifas || []).forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'tarifa-card';
+    card.innerHTML = `
+      <h3>${VEHICLES[t.vehiculo]?.icon||''} ${VEHICLES[t.vehiculo]?.label || t.vehiculo}</h3>
+      <label>Costo base ($)</label>
+      <input type="number" step="0.01" value="${t.base}" data-tarifa="${t.vehiculo}" data-campo="base">
+      <label>Costo por km ($)</label>
+      <input type="number" step="0.01" value="${t.por_km}" data-tarifa="${t.vehiculo}" data-campo="por_km">
+      <label>Velocidad promedio (km/h)</label>
+      <input type="number" step="1" value="${t.speed_kmh}" data-tarifa="${t.vehiculo}" data-campo="speed_kmh">
+      <button onclick="guardarTarifa('${t.vehiculo}', this)">Guardar</button>`;
+    grid.appendChild(card);
+  });
+
+  const configCard = document.createElement('div');
+  configCard.className = 'tarifa-card';
+  configCard.innerHTML = `<h3>⚙️ Ajustes generales</h3>` + (config || []).map(c => `
+      <label>${c.clave.replace(/_/g,' ')}</label>
+      <input type="number" step="0.01" value="${c.valor}" data-config="${c.clave}">
+    `).join('') + `<button onclick="guardarConfig(this)">Guardar todo</button>`;
+  grid.appendChild(configCard);
+}
+
+async function guardarTarifa(vehiculo, btn){
+  const card = btn.closest('.tarifa-card');
+  const base     = parseFloat(card.querySelector('[data-campo="base"]').value);
+  const por_km   = parseFloat(card.querySelector('[data-campo="por_km"]').value);
+  const speed    = parseFloat(card.querySelector('[data-campo="speed_kmh"]').value);
+  const { error } = await _supabase.from('tarifas').update({ base, por_km, speed_kmh: speed }).eq('vehiculo', vehiculo);
+  showToast(error ? '❌ ' + error.message : '✅ Tarifa actualizada');
+}
+
+async function guardarConfig(btn){
+  const card = btn.closest('.tarifa-card');
+  const inputs = card.querySelectorAll('[data-config]');
+  for (const inp of inputs) {
+    await _supabase.from('config_general').update({ valor: parseFloat(inp.value) }).eq('clave', inp.dataset.config);
+  }
+  showToast('✅ Ajustes actualizados');
+}
+</script>
+</body>
+</html>
